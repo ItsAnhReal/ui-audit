@@ -37,3 +37,24 @@ def test_routes_for_changes_picks_what_a_change_can_affect():
     for route in baseline["routes"]:
         route.pop("sources", None)
     assert routes_for_changes(baseline, ["src/Pricing.tsx"])[0] == ["/", "/pricing"]
+
+
+def test_like_reuses_an_earlier_runs_settings(tmp_path):
+    import argparse
+    import json
+
+    from ui_audit.cli import _load_config
+    from ui_audit.config import Config
+
+    cfg = Config()
+    cfg.base_url, cfg.storage_state, cfg.locale = "http://localhost:8080", ".ui-audit/auth.json", "de"
+    cfg.setup = [{"click": "button.accept"}]
+    run = tmp_path / "shop-1"
+    run.mkdir()
+    (run / "report.json").write_text(json.dumps({"config": cfg.to_dict()}))
+    again, path = _load_config(argparse.Namespace(like=str(run), output=None))
+    assert path is None and again.storage_state == ".ui-audit/auth.json" and again.locale == "de" and again.setup == cfg.setup
+    assert again.output == str(run) + "-again"  # never the run it copies
+    override, _ = _load_config(argparse.Namespace(like=str(run), output=str(tmp_path / "x"), locale="fr"))
+    assert override.output == str(tmp_path / "x") and override.locale == "fr"
+    assert main(["audit", "--like", str(tmp_path / "missing")]) == 2

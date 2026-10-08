@@ -283,8 +283,8 @@
     const record = model.states.get(route + "|" + state);
     const label = (record && record.label) || state;
     // automatic states are labelled "<kind>: <control name>"
-    const auto = /^(expand|popup|tab|details|marked): (.*)$/.exec(label);
-    return auto ? t(auto[1] === "tab" ? "state.tab" : "state.clicked", { name: auto[2] }) : label;
+    const auto = /^(expand|popup|tab|details|marked): ([^]*)$/.exec(label);
+    return auto ? t(auto[1] === "tab" ? "state.tab" : "state.clicked", { name: auto[2].replace(/\s+/g, " ").trim() }) : label.replace(/\s+/g, " ");
   }
   // The audit writes these in English; known shapes get translated, anything else is shown as is.
   function skipText(why) {
@@ -328,7 +328,12 @@
     return detail;
   }
   // A screenshot that is gone (deleted, or never copied along) shows as an empty tile, not a broken image.
-  function missingImage(event) { const img = event.currentTarget; img.removeAttribute("src"); img.classList.add("missing"); }
+  function missingImage(event) {
+    const img = event.currentTarget;
+    img.removeAttribute("src");
+    img.classList.add("missing");
+    if (img.parentElement) img.parentElement.dataset.missing = t("shots.missing");
+  }
   function counts(issues) {
     const c = { P1: 0, P2: 0, P3: 0 };
     for (const i of issues) if (!i.accepted) c[i.severity] = (c[i.severity] || 0) + 1;
@@ -416,7 +421,10 @@
       h("div", { class: "grow" }, text),
       action ? h("button", { class: "btn sm", onClick: () => { node.remove(); action.run(); } }, action.label) : null,
       h("button", { class: "btn ghost icon sm", "aria-label": t("action.close"), onClick: () => node.remove() }, icon("x")));
-    document.getElementById("toasts").append(node);
+    const box = document.getElementById("toasts");
+    const top = [...document.querySelectorAll("dialog[open]")].pop();
+    if (box.parentElement !== (top || document.body)) (top || document.body).append(box);  // a modal dialog covers the page
+    box.append(node);
     if (ms) setTimeout(() => node.remove(), action ? ms * 1.6 : ms);
     return node;
   }
@@ -430,7 +438,7 @@
     closeMenu();
     openMenuAnchor = anchor;
     anchor.setAttribute("aria-expanded", "true");
-    const node = h("div", { class: "menu", role: "menu" });
+    const node = h("div", { class: "menu", role: "menu", tabindex: "-1" });
     for (const item of items) {
       if (!item) continue;
       if (item === "sep") { node.append(h("div", { class: "sep", role: "separator" })); continue; }
@@ -451,12 +459,12 @@
     node.style.top = `${Math.max(8, top)}px`;
     openMenuNode = node;
     const buttons = () => [...node.querySelectorAll("button:not([disabled])")];
-    (node.querySelector('[aria-checked="true"], [aria-current="true"]') || buttons()[0])?.focus();
+    (node.querySelector('[aria-checked="true"], [aria-current="true"]') || buttons()[0] || node).focus();
     node.addEventListener("keydown", (event) => {
       const list = buttons(), at = list.indexOf(document.activeElement);
       if (event.key === "ArrowDown") { event.preventDefault(); list[(at + 1) % list.length]?.focus(); }
       if (event.key === "ArrowUp") { event.preventDefault(); list[(at - 1 + list.length) % list.length]?.focus(); }
-      if (event.key === "Escape" || event.key === "Tab") { closeMenu(); anchor.focus(); }
+      if (event.key === "Escape" || event.key === "Tab") { if (event.key === "Escape") event.preventDefault(); closeMenu(); anchor.focus(); }
     });
     return node;
   }
@@ -466,7 +474,12 @@
   function modal(content, { onClose, cls = "modal" } = {}) {
     const dialog = h("dialog", { class: cls }, content);
     document.body.append(dialog);
-    dialog.addEventListener("close", () => { dialog.remove(); if (onClose) onClose(); });
+    dialog.addEventListener("close", () => {
+      const toasts = document.getElementById("toasts");
+      if (dialog.contains(toasts)) document.body.append(toasts);
+      dialog.remove();
+      if (onClose) onClose();
+    });
     dialog.addEventListener("click", (event) => { if (event.target === dialog) dialog.close(); });
     dialog.showModal();
     return dialog;
@@ -505,11 +518,18 @@
       next.disabled = at === items.length - 1;
       drawBoxes(stage, img, item.boxes || []);
     }
-    function step(by) { if (at + by >= 0 && at + by < items.length) { at += by; show(); } }
-    dialog.addEventListener("keydown", (event) => {
-      if (event.key === "ArrowLeft") step(-1);
-      if (event.key === "ArrowRight") step(1);
-    });
+    function step(by) {
+      if (at + by < 0 || at + by >= items.length) return;
+      at += by;
+      show();
+      if (!dialog.contains(document.activeElement) || document.activeElement.disabled) (prev.disabled ? next : prev).focus();
+    }
+    const onKey = (event) => {
+      if (event.key === "ArrowLeft") { event.preventDefault(); step(-1); }
+      if (event.key === "ArrowRight") { event.preventDefault(); step(1); }
+    };
+    document.addEventListener("keydown", onKey);
+    dialog.addEventListener("close", () => document.removeEventListener("keydown", onKey));
     show();
   }
   function drawBoxes(stage, img, boxes, onPlaced) {
@@ -518,9 +538,13 @@
       const W = img.naturalWidth, H = img.naturalHeight;
       if (!W || !H) return;
       let first = null;
+      const scale = (img.getBoundingClientRect().width || W) / W;
       for (const box of boxes) {
         const r = box.rect;
-        const node = h("i", { class: `box ${box.severity}${box.other ? " other" : ""}`, style: {
+        const page = r.width * r.height > W * H * 0.5 || (r.width >= W * 0.95 && r.height >= H * 0.6);
+        const tiny = !page && !box.other && Math.min(r.width, r.height) * scale < 16;
+        const inside = page || r.y * scale < 22;  // no room for the label above it
+        const node = h("i", { class: `box ${box.severity}${box.other ? " other" : ""}${page ? " page" : ""}${tiny ? " tiny" : ""}${inside ? " label-in" : ""}`, style: {
           left: `${(r.x / W) * 100}%`, top: `${(r.y / H) * 100}%`, width: `${(Math.max(r.width, 3) / W) * 100}%`, height: `${(Math.max(r.height, 3) / H) * 100}%` } },
         box.other ? null : h("b", { text: box.label }));
         stage.append(node);
@@ -533,7 +557,7 @@
 
   // ---------------------------------------------------------------- top bar
 
-  function topbar(crumbs, extra) {
+  function topbar(crumbs, extra, { newButton = true } = {}) {
     const bar = h("header", { class: "topbar" },
       h("a", { class: "brand", href: IS_APP ? "#/" : "#/findings", "aria-label": "ui-audit" },
         h("span", { class: "mark" }, icon("width")), h("span", { class: "word", text: "ui-audit" })),
@@ -542,7 +566,7 @@
       IS_APP ? h("span", { id: "job-pill" }) : null,
       extra,
       h("button", { class: "btn ghost icon", "aria-label": t("settings.title"), title: t("settings.title"), "aria-haspopup": "menu", "aria-expanded": "false", onClick: (e) => settingsMenu(e.currentTarget) }, icon("sliders")),
-      IS_APP ? h("button", { class: "btn primary", onClick: () => newAuditSheet() }, icon("plus"), h("span", { class: "new-label", text: t("action.newAudit") })) : null);
+      IS_APP && newButton ? h("button", { class: "btn primary", onClick: () => newAuditSheet() }, icon("plus"), h("span", { class: "new-label", text: t("action.newAudit") })) : null);
     return bar;
   }
   function settingsMenu(anchor) {
@@ -568,7 +592,8 @@
     if (!active.length) { document.title = baseTitle; return; }
     const job = active.find((j) => j.status === "running") || active[0];
     const fraction = job.progress && job.progress.fraction;
-    const text = job.status === "queued" ? t("job.queued") : fraction ? t("job.pill", { pct: Math.round(fraction * 100) }) : t("job.starting");
+    const measuring = job.progress && job.progress.route;
+    const text = job.status === "queued" ? t("job.queued") : fraction || measuring ? t("job.pill", { pct: Math.round((fraction || 0) * 100) }) : t("job.starting");
     pill.append(h("a", { class: "job-pill", href: "#/", title: job.name }, ring(fraction), h("span", { class: "txt", text }),
       active.length > 1 ? badge(`+${active.length - 1}`) : null));
     document.title = `${fraction ? Math.round(fraction * 100) + "% · " : ""}${baseTitle}`;
@@ -616,7 +641,7 @@
     const jobsBox = h("div", { class: "jobs" });
     const setupBox = h("div", { class: "setup" });
     const body = h("div");
-    root.replaceChildren(topbar(h("span", { class: "here", text: S.state ? S.state.project : "" })), main);
+    root.replaceChildren(topbar(h("span", { class: "here", text: S.state ? S.state.project : "" }), null, { newButton: false }), main);
     let lastRuns = "";
 
     function head() {
@@ -656,8 +681,8 @@
     }
 
     function hero(runs) {
-      const latest = runs[0];
-      const previous = latest.targeted ? null : runs.slice(1).find((r) => comparable(latest, r));
+      const latest = runs.find((r) => !r.targeted && !/-recheck(-|$)/.test(r.name)) || runs[0];
+      const previous = latest.targeted ? null : runs.slice(runs.indexOf(latest) + 1).find((r) => comparable(latest, r));
       const tile = (s) => {
         const value = latest.counts[s] || 0;
         const delta = previous ? value - (previous.counts[s] || 0) : null;
@@ -827,7 +852,12 @@
     try { await api(`jobs/${job.id}/cancel`, {}); toast("info", t("toast.cancelling")); } catch (error) { toast("bad", error.message); }
     refreshState();
   }
-  async function runAgain(name) {
+  async function runAgain(name, anyway) {
+    const run = S.state && S.state.runs.find((r) => r.name === name);
+    if (!anyway && run && run.base_url) {
+      const reach = await checkReach(run.base_url);
+      if (!reach.ok) { toast("bad", t("toast.unreachable", { url: run.base_url }), { label: t("action.startAnyway"), run: () => runAgain(name, true) }, 0); return; }
+    }
     try {
       const job = await api(`runs/${enc(name)}/again`, {});
       toast("good", t("toast.started", { name: job.name }), parseHash().view === "home" ? null : { label: t("toast.showProgress"), run: () => go({ view: "home" }) });
@@ -885,29 +915,32 @@
     };
     const configInfo = () => configs.find((c) => c.path === form.config) || {};
 
-    const urlInput = h("input", { type: "url", id: "na-url", placeholder: "http://localhost:3000", autocomplete: "off", spellcheck: "false" });
+    const urlInput = h("input", { type: "url", id: "na-url", placeholder: "http://localhost:3000", autocomplete: "off", spellcheck: "false", "aria-describedby": "na-url-err" });
+    const fieldError = (id) => h("div", { class: "field-error", id, hidden: true, role: "alert" });
+    const urlError = fieldError("na-url-err"), routesError = fieldError("na-routes-err"), widthsError = fieldError("na-widths-err");
     const urlStatus = h("span", { class: "status-dot", "aria-live": "polite" });
     const configSelect = h("select", { id: "na-config" }, configs.map((c) => h("option", { value: c.path, text: c.path })), h("option", { value: "", text: t("na.noSettings") }));
     const modeButtons = ["quick", "complete", "pages"].map((mode) => h("button", { type: "button", "aria-pressed": "false", "data-mode": mode, onClick: () => { form.mode = mode; sync(); } },
       h("b", { text: t(`na.mode.${mode}`) }), h("span", { text: t(`na.mode.${mode}.help`) })));
-    const routesInput = h("textarea", { id: "na-routes", rows: "3", placeholder: "/\n/pricing", spellcheck: "false" });
+    const routesInput = h("textarea", { id: "na-routes", rows: "3", placeholder: t("na.routes.placeholder"), spellcheck: "false", "aria-describedby": "na-routes-err" });
     const knownRoutes = [...new Set(st.runs.flatMap((r) => r.routes || []))];
-    const widthsInput = h("input", { type: "text", id: "na-widths", placeholder: "390, 768, 1366", inputmode: "numeric" });
+    const widthsInput = h("input", { type: "text", id: "na-widths", placeholder: t("na.widths.placeholder"), inputmode: "numeric", "aria-describedby": "na-widths-err" });
     const pagesBox = h("div", { class: "field" },
-      h("label", { for: "na-routes", text: t("na.routes") }), routesInput,
+      h("label", { for: "na-routes", text: t("na.routes") }), routesInput, routesError,
       knownRoutes.length ? h("div", { class: "help" }, t("na.routesSeen"), " ", knownRoutes.slice(0, 8).map((r) => h("button", { type: "button", class: "chip", style: { margin: "2px" }, onClick: () => {
         routesInput.value = [...new Set([...routesInput.value.split(/\s+/).filter(Boolean), r])].join("\n"); form.routes = routesInput.value; sync();
       } }, r))) : null,
-      h("label", { for: "na-widths", text: t("na.widths"), style: { marginTop: "6px" } }), widthsInput, h("div", { class: "help", text: t("na.widths.help") }));
+      h("label", { for: "na-widths", text: t("na.widths"), style: { marginTop: "6px" } }), widthsInput, widthsError, h("div", { class: "help", text: t("na.widths.help") }));
     const sessionSelect = h("select", { id: "na-session" });
     const loginBox = h("div", { class: "login-box", hidden: true });
     const localeSelect = h("select", { id: "na-locale" });
     const statesBox = h("input", { type: "checkbox", id: "na-states", checked: true });
     const annotateBox = h("input", { type: "checkbox", id: "na-annotate" });
-    const changedInput = h("input", { type: "text", id: "na-changed", placeholder: "main", spellcheck: "false" });
+    const changedInput = h("input", { type: "text", id: "na-changed", placeholder: t("na.changed.placeholder"), spellcheck: "false" });
     const nameInput = h("input", { type: "text", id: "na-name", spellcheck: "false" });
     const command = h("pre", { class: "cmd" });
-    const estimate = h("span", { class: "hint" });
+    const estimate = h("span", { class: "hint", "aria-live": "polite" });
+    let reachable = true, submitError = "";
     const start = h("button", { class: "btn primary", type: "submit" }, icon("play"), t("na.start"));
 
     function fillSessions(selected) {
@@ -939,7 +972,32 @@
       urlStatus.className = `status-dot ${result.ok ? "ok" : "bad"}`;
       urlStatus.textContent = result.ok ? t("na.reachable") : t("na.unreachable");
       urlStatus.title = result.detail || "";
+      reachable = result.ok;
+      footNote();
     }, 350);
+    // The footer says the one thing that matters most: why it did not start, that it will fail, or how long it takes.
+    function footNote() {
+      const similar = S.state.runs.find((r) => !r.targeted && r.base_url === urlInput.value.trim() && r.fast === (form.mode === "quick"));
+      const [kind, text] = submitError ? ["bad", submitError] : !reachable ? ["warn", t("na.willFail")]
+        : ["", form.mode === "pages" ? t("na.estimate.pages") : similar ? t("na.estimate", { took: fmt.dur(similar.seconds), name: similar.name }) : ""];
+      estimate.className = `hint${kind ? " " + kind : ""}`;
+      estimate.textContent = text;
+    }
+    // Checked here so a mistake shows next to its field instead of as a failed start.
+    function validate() {
+      const problems = [];
+      const show = (box, input, text) => { box.hidden = !text; box.textContent = text || ""; input.setAttribute("aria-invalid", String(!!text)); if (text) problems.push(input); };
+      show(urlError, urlInput, /^https?:\/\/\S+$/.test(urlInput.value.trim()) ? "" : t("na.err.url"));
+      if (form.mode === "pages") {
+        const routes = routesInput.value.split(/[\s,]+/).filter(Boolean);
+        show(routesError, routesInput, !routes.length ? t("na.err.noRoutes") : routes.some((r) => !r.startsWith("/")) ? t("na.err.slash") : "");
+        const widths = widthsInput.value.split(/[\s,]+/).filter(Boolean);
+        show(widthsError, widthsInput, widths.some((w) => !/^\d{3,4}$/.test(w)) ? t("na.err.widths") : "");
+      } else {
+        show(routesError, routesInput, ""); show(widthsError, widthsInput, "");
+      }
+      return problems;
+    }
 
     function body() {
       const routes = routesInput.value.split(/[\s,]+/).filter(Boolean);
@@ -966,7 +1024,7 @@
       if (!b.states) parts.push("--no-states");
       if (!b.annotate) parts.push("--no-annotate");
       if (b.changed_since) parts.push(`--changed-since ${quote(b.changed_since)}`);
-      parts.push(`--output ${quote(S.state.runs_dir + "/" + (b.name || "…"))}`);
+      if (b.name) parts.push(`--output ${quote(S.state.runs_dir + "/" + b.name)}`);
       return parts.join(" \\\n  ");
     }
     function sync() {
@@ -975,13 +1033,15 @@
       changedField.hidden = form.mode === "pages";
       command.textContent = cli();
       command.append(h("button", { type: "button", class: "btn ghost icon sm", "aria-label": t("action.copy"), onClick: () => copy(cli().replace(/ \\\n {2}/g, " ")) }, icon("copy")));
-      const similar = S.state.runs.find((r) => !r.targeted && r.base_url === urlInput.value.trim() && r.fast === (form.mode === "quick"));
-      estimate.textContent = form.mode === "pages" ? t("na.estimate.pages") : similar ? t("na.estimate", { took: fmt.dur(similar.seconds), name: similar.name }) : "";
+      footNote();
     }
 
     const changedField = h("div", { class: "field" }, h("label", { for: "na-changed", text: t("na.changed") }), changedInput, h("div", { class: "help", text: t("na.changed.help") }));
     const content = h("form", { style: { display: "contents" }, onSubmit: async (event) => {
       event.preventDefault();
+      submitError = "";
+      const problems = validate();
+      if (problems.length) { problems[0].focus(); footNote(); return; }
       start.disabled = true;
       try {
         const job = await api("runs", body());
@@ -992,14 +1052,15 @@
         await refreshState();
         go({ view: "home" });
       } catch (error) {
-        toast("bad", error.message);
+        submitError = t("na.failed", { error: error.message });
+        footNote();
         start.disabled = false;
       }
     } },
     h("header", {}, h("h2", { text: t("na.title") }), h("button", { type: "button", class: "btn ghost icon", "aria-label": t("action.close"), onClick: () => dialog.close() }, icon("x"))),
     h("div", { class: "body" },
       configs.length ? h("div", { class: "field" }, h("label", { for: "na-config", text: t("na.settings") }), configSelect, h("div", { class: "help", text: t("na.settings.help") })) : null,
-      h("div", { class: "field" }, h("label", { for: "na-url", text: t("na.url") }), h("div", { class: "row" }, urlInput, urlStatus)),
+      h("div", { class: "field" }, h("label", { for: "na-url", text: t("na.url") }), h("div", { class: "row" }, urlInput, urlStatus), urlError),
       h("div", { class: "field" }, h("div", { class: "lbl", id: "na-mode-label", text: t("na.mode") }), h("div", { class: "seg big", role: "group", "aria-labelledby": "na-mode-label" }, modeButtons)),
       pagesBox,
       h("div", { class: "field" }, h("label", { for: "na-session", text: t("na.session") }),
@@ -1052,15 +1113,16 @@
 
     configSelect.value = form.config;
     configSelect.addEventListener("change", () => { form.config = configSelect.value; form.session = null; form.locale = null; applyConfig(); sync(); });
-    urlInput.addEventListener("input", () => { checkUrl(); sync(); });
-    for (const input of [routesInput, widthsInput, changedInput, nameInput]) input.addEventListener("input", sync);
+    const edited = () => { submitError = ""; for (const box of [urlError, routesError, widthsError]) if (!box.hidden) validate(); sync(); };
+    urlInput.addEventListener("input", () => { checkUrl(); edited(); });
+    for (const input of [routesInput, widthsInput, changedInput, nameInput]) input.addEventListener("input", edited);
     for (const input of [sessionSelect, localeSelect, statesBox, annotateBox]) input.addEventListener("change", sync);
     routesInput.value = form.routes;
     widthsInput.value = form.widths;
     annotateBox.checked = !!form.annotate;
     applyConfig();
     sync();
-    (form.mode === "pages" ? routesInput : start).focus();
+    (form.mode === "pages" ? routesInput : configs.length ? configSelect : urlInput).focus();  // not Start: Enter would launch it
   }
 
   let askedNotify = false;
@@ -1105,10 +1167,9 @@
       } }, icon("more")),
     ] : [];
     const tabs = h("nav", { class: "tabs", "aria-label": t("nav.tabs") },
-      tabsDef.map(([key, label, n]) => h("a", { href: link({ view: "run", run: route.run, tab: key }), "aria-current": key === tab ? "page" : null }, label, n === null ? null : h("span", { class: "n", text: fmt.n(n) }))),
-      h("span", { class: "spacer" }), runActions);
+      tabsDef.map(([key, label, n]) => h("a", { href: link({ view: "run", run: route.run, tab: key }), "aria-current": key === tab ? "page" : null }, label, n === null ? null : h("span", { class: "n", text: fmt.n(n) }))));
     const body = h("div", { class: "tab-body" });
-    root.replaceChildren(topbar(crumbs), runHeader(model, name), runNotices(model), tabs, body);
+    root.replaceChildren(topbar(crumbs), runHeader(model, name, runActions), runNotices(model), tabs, body);
 
     let page;
     if (tab === "findings") page = findingsTab(model, route, vs, body);
@@ -1133,9 +1194,8 @@
     ]);
   }
 
-  function runHeader(model, name) {
+  function runHeader(model, name, actions) {
     const data = model.data;
-    const c = counts(model.issues);
     const meta = [];
     if (data.base_url) meta.push(h("span", {}, icon("monitor"), h("span", { class: "mono", text: data.base_url.replace(/^https?:\/\//, "") })));
     if (data.created) meta.push(h("span", { title: fmt.date(data.created) }, icon("clock"), `${fmt.date(data.created)} · ${fmt.dur((data.stats || {}).seconds)}`));
@@ -1144,24 +1204,29 @@
     if (data.config && data.config.signed_in) meta.push(h("span", {}, icon("lock"), t("tag.signedIn")));
     if (data.config && data.config.sweep === "key") meta.push(h("span", { title: t("tag.fast.title") }, t("tag.fast")));
     if ((data.only_routes || []).length) meta.push(h("span", { title: data.only_routes.join("  ") }, t("tag.targeted")));
+    const doubtful = model.audited.filter((r) => r.content && r.content.state !== "ok");
+    if (doubtful.length) {
+      meta.push(h("button", { class: "badge warn as-btn", "aria-haspopup": "true", "aria-expanded": "false", onClick: (e) => menu(e.currentTarget, [
+        { head: plural(doubtful.length, "notice.doubtful.one", "notice.doubtful.many") },
+        { node: h("div", { class: "menu-note" }, h("p", { text: t("notice.doubtful.text") }), h("ul", {}, doubtful.map((r) => h("li", {}, h("code", { text: r.path }), " ",
+          known(`content.${r.content.state}`, r.content.state), r.content.detail ? h("span", { class: "dim", text: ` · ${contentDetail(r.content.detail)}` }) : "")))) },
+      ]) }, icon("alert"), plural(doubtful.length, "tag.doubtful.one", "tag.doubtful.many")));
+    }
     return h("div", { class: "run-head" },
-      h("div", {}, h("h1", { text: name }), h("div", { class: "meta" }, meta)),
-      h("div", { class: "tiles" }, SEVS.map((s) => h("div", { class: `tile ${s}`, title: t(`sev.${s}.long`) }, h("div", { class: "k", text: s }), h("div", { class: "v num", text: fmt.n(c[s]) })))));
+      h("div", { class: "title-row" }, h("h1", { text: name }), headCounts(model), h("span", { class: "spacer" }), actions && actions.length ? h("div", { class: "head-actions" }, actions) : null),
+      h("div", { class: "meta" }, meta));
+  }
+  function headCounts(model) {
+    const c = counts(model.issues);
+    return h("div", { class: "head-counts" }, SEVS.map((s) => h("span", { class: `hc ${s}${c[s] ? "" : " zero"}`, title: t(`sev.${s}.long`) }, h("b", { class: "num", text: fmt.n(c[s]) }), s)));
   }
 
   function runNotices(model) {
     const data = model.data, notes = [];
-    const doubtful = model.audited.filter((r) => r.content && r.content.state !== "ok");
-    if (doubtful.length) {
-      notes.push(h("div", { class: "notice warn" }, icon("alert"), h("details", { class: "grow" },
-        h("summary", {}, h("b", { text: plural(doubtful.length, "notice.doubtful.one", "notice.doubtful.many") }), " ", t("notice.doubtful.text"), " ", h("span", { class: "reveal", text: t("notice.doubtful.show") })),
-        h("ul", {}, doubtful.map((r) => h("li", {}, h("code", { text: r.path }), " ", known(`content.${r.content.state}`, r.content.state),
-          r.content.detail ? h("span", { class: "dim", text: ` · ${contentDetail(r.content.detail)}` }) : ""))))));
-    }
     if (data.verify && (data.verify.fixed || data.verify.introduced)) {
       const v = data.verify;
       const baseName = (v.baseline || "").split("/").filter(Boolean).pop();
-      notes.push(h("div", { class: `notice ${v.introduced.length ? "warn" : "good"}` }, icon("compare"), h("div", { class: "grow" },
+      notes.push(h("div", { class: `notice slim ${v.introduced.length ? "warn" : "good"}` }, icon("compare"), h("div", { class: "grow" },
         h("b", { text: t("notice.verify", { name: baseName || "?" }) }), " ",
         t("notice.verify.counts", { fixed: v.fixed.length, introduced: v.introduced.length, persistent: v.persistent.length })),
       IS_APP && baseName && S.state && S.state.runs.some((r) => r.name === baseName) ? h("a", { class: "btn sm", href: link({ view: "compare", base: baseName, current: model.name }) }, t("action.compare")) : null));
@@ -1183,6 +1248,7 @@
         route.f = f;
         history.replaceState(null, "", link({ view: "run", run: route.run, f }));
         drawList(); drawDetail();
+        list.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
       } }, t(`list.by.${mode}`))));
     const sevChips = SEVS.map((s) => h("button", { class: `chip ${s}`, "data-sev": s, "aria-pressed": String(vs.sev.has(s)), onClick: () => {
       if (vs.sev.has(s)) vs.sev.delete(s); else vs.sev.add(s);
@@ -1195,9 +1261,10 @@
     routeSelect.value = vs.route; checkSelect.value = vs.check;
     const acceptedChip = h("button", { class: "chip", "aria-pressed": String(vs.accepted), title: t("list.accepted.title"), onClick: () => { vs.accepted = !vs.accepted; drawList(); } });
     const metaLine = h("div", { class: "list-meta" });
+    const placesShown = {};  // cause key -> show every place, not the first few
     const chartBox = h("div", { class: "wchart" });
     const list = h("div", { class: "list", role: "listbox", "aria-label": t("tab.findings"), tabindex: "-1" });
-    const detail = h("section", { class: "detail", "aria-live": "polite" });
+    const detail = h("section", { class: "detail" });
     const split = h("div", { class: "split" },
       h("div", { class: "list-pane" },
         h("div", { class: "list-tools" },
@@ -1233,13 +1300,20 @@
         const byRoute = new Map();
         for (const i of shown) { if (!byRoute.has(i.route)) byRoute.set(i.route, []); byRoute.get(i.route).push(i); }
         return [...byRoute].sort((a, b) => ORDER[worst(a[1])] - ORDER[worst(b[1])] || b[1].length - a[1].length || a[0].localeCompare(b[0]))
-          .map(([r, issues]) => ({ route: r, issues, items: issues.map((i) => ({ key: `i:${i.id}`, issues: [i], all: [i], severity: i.severity, check: i.check })) }));
+          .map(([r, issues]) => {
+            const ordered = issues.slice().sort((a, b) => RUNTIME_CHECKS.has(a.check) - RUNTIME_CHECKS.has(b.check));
+            const labels = selectorLabels(ordered.map((i) => i.selector));
+            return { route: r, issues, items: ordered.map((i, n) => ({ key: `i:${i.id}`, issues: [i], all: [i], severity: i.severity, check: i.check, label: labels[n] })) };
+          });
       }
       const byGroup = new Map();
       for (const i of shown) { const k = i.group || i.id; if (!byGroup.has(k)) byGroup.set(k, []); byGroup.get(k).push(i); }
       const routesOf = (issues) => new Set(issues.map((i) => i.route)).size;
-      return [{ route: null, items: [...byGroup].map(([k, issues]) => ({ key: `g:${k}`, issues, all: (model.groups.get(k) || { issues }).issues, severity: worst(issues), check: issues[0].check, info: (model.groups.get(k) || {}).info }))
-        .sort((a, b) => ORDER[a.severity] - ORDER[b.severity] || routesOf(b.issues) - routesOf(a.issues) || b.issues.length - a.issues.length || a.check.localeCompare(b.check)) }];
+      const all = [...byGroup].map(([k, issues]) => ({ key: `g:${k}`, issues, all: (model.groups.get(k) || { issues }).issues, severity: worst(issues), check: issues[0].check, info: (model.groups.get(k) || {}).info }))
+        .sort((a, b) => ORDER[a.severity] - ORDER[b.severity] || routesOf(b.issues) - routesOf(a.issues) || b.issues.length - a.issues.length || a.check.localeCompare(b.check));
+      const runtime = all.filter((item) => RUNTIME_CHECKS.has(item.check));
+      const layout = all.filter((item) => !RUNTIME_CHECKS.has(item.check));
+      return [{ route: null, items: layout }, ...(runtime.length ? [{ route: null, title: t("list.runtime"), items: runtime }] : [])];
     }
     function itemNode(item) {
       const first = item.issues[0];
@@ -1247,16 +1321,19 @@
       const routes = [...new Set(item.issues.map((i) => i.route))];
       const source = item.info && item.info.source ? `${item.info.source.file}:${item.info.source.line}` : (first.source_candidates || [])[0] ? first.source_candidates[0].file : null;
       const selected = route.f === item.key;
+      const runtime = RUNTIME_CHECKS.has(first.check);
+      // the quoted text tells text findings apart; elsewhere the likely source file does
+      const quoted = /^(text-spill|clipped-content)$/.test(first.check);
       const node = h("button", { class: `item ${item.severity}${first.accepted ? " accepted" : ""}`, role: "option", "aria-selected": String(selected), "data-key": item.key, id: `item-${item.key.replace(":", "-")}`,
-        onClick: () => select(item.key) },
+        tabindex: "-1", onClick: () => select(item.key) },
       h("span", { class: "rail" }),
       h("span", { class: "t" }, h("span", { class: "sev", text: item.severity }), h("span", { text: I18N.check(first.check) })),
-      h("span", { class: "w", text: a === undefined ? "" : fmt.range(a, b) }),
+      h("span", { class: "w", text: a === undefined || runtime ? "" : fmt.range(a, b) }),
       vs.mode === "page"
-        ? h("span", { class: "s" }, first.state !== "default" ? badge(stateLabel(model, first.route, first.state)) : null, h("span", { class: "route", text: shortSelector(first.selector) }))
+        ? h("span", { class: "s" }, first.state !== "default" ? badge(stateLabel(model, first.route, first.state)) : null, runtime ? null : h("span", { class: "route", text: item.label || shortSelector(first.selector) }))
         : h("span", { class: "s" }, h("span", { class: "route", text: routes[0] }), routes.length > 1 ? badge(t("list.morePages", { n: routes.length - 1 })) : null,
           item.issues.length > routes.length ? badge(`${item.issues.length}×`) : null, first.state !== "default" && routes.length === 1 ? badge(stateLabel(model, first.route, first.state)) : null),
-      vs.mode === "page" ? h("span", { class: "x", text: messageText(first) }) : h("span", { class: "x", text: source || messageText(first) }));
+      vs.mode === "page" || quoted || runtime ? h("span", { class: "x", text: messageText(first) }) : h("span", { class: "x", text: source || messageText(first) }));
       return node;
     }
     function drawList() {
@@ -1267,9 +1344,14 @@
         if (group.route !== null) {
           const c = counts(group.issues);
           list.append(h("div", { class: "list-group" }, h("b", { text: group.route }), h("span", { text: SEVS.filter((s) => c[s]).map((s) => `${c[s]} ${s}`).join(" · ") || t("list.accepted") })));
+        } else if (group.title && group.items.length) {
+          list.append(h("div", { class: "list-group plain" }, h("b", { text: group.title }), h("span", { text: fmt.n(group.items.length) })));
         }
         list.append(...group.items.map(itemNode));
       }
+      // one tab stop for the whole list; ↑ ↓ move inside it
+      const stop = list.querySelector('.item[aria-selected="true"]') || list.querySelector(".item");
+      if (stop) stop.tabIndex = 0;
       const total = model.issues.filter((i) => !!i.accepted === vs.accepted).length;
       const shown = items.reduce((n, item) => n + item.issues.length, 0);
       if (!items.length) {
@@ -1286,21 +1368,19 @@
       const causeCount = vs.mode === "cause" ? items.length : new Set(items.map((i) => i.issues[0].group || i.issues[0].id)).size;
       metaLine.replaceChildren(h("span", { class: "grow" }, shown === total ? plural(total, "list.findings.one", "list.findings.many") : t("list.findingsOf", { n: fmt.n(shown), total: fmt.n(total) }),
         causeCount < shown ? ` · ${plural(causeCount, "unit.causes.one", "unit.causes.many")}` : ""),
-      vs.width !== null ? h("button", { class: "chip clear", onClick: () => { vs.width = null; drawList(); } }, t("list.atWidth", { w: vs.width }), icon("x")) : "");
+      vs.width !== null ? h("button", { class: "chip clear", onClick: () => { vs.width = null; drawList(); } }, t("list.atWidth", { w: vs.width }), icon("x")) : h("span", { class: "cap", text: t("chart.title") }));
       drawChart();
-      if (route.f && !items.some((i) => i.key === route.f) && !document.querySelector(`[data-key="${CSS.escape(route.f)}"]`)) {
-        // the selected finding is filtered out: keep showing it, the list says why it is missing
-      }
     }
+    const filtered = () => !!(vs.sev.size || vs.route || vs.check || vs.text || vs.width !== null);
     function clearFilters() {
       vs.sev.clear(); vs.route = ""; vs.check = ""; vs.text = ""; vs.width = null;
       search.value = ""; routeSelect.value = ""; checkSelect.value = "";
-      drawList();
+      drawList(); drawDetail();
     }
     function drawChart() {
-      const pool = model.issues.filter((i) => matches(i, true) && i.widths && i.widths.length);
+      const pool = model.issues.filter((i) => matches(i, true) && i.widths && i.widths.length && !RUNTIME_CHECKS.has(i.check));
       const item = currentItem();
-      chartBox.replaceChildren(widthChart(model, pool, vs.width, item ? span(item.issues) : null, (w) => { vs.width = vs.width === w ? null : w; drawList(); }));
+      chartBox.replaceChildren(widthChart(model, pool, vs.width, item ? span(item.issues) : null, (w) => { vs.width = w === null || vs.width === w ? null : w; drawList(); }));
     }
     function currentItem() {
       if (!route.f) return null;
@@ -1314,7 +1394,7 @@
     function select(key, focusList) {
       route.f = key;
       history.replaceState(null, "", link({ view: "run", run: route.run, f: key }));
-      for (const node of list.querySelectorAll(".item")) node.setAttribute("aria-selected", String(node.dataset.key === key));
+      for (const node of list.querySelectorAll(".item")) { node.setAttribute("aria-selected", String(node.dataset.key === key)); node.tabIndex = node.dataset.key === key ? 0 : -1; }
       const node = list.querySelector(`[data-key="${CSS.escape(key)}"]`);
       if (node) { node.scrollIntoView({ block: "nearest" }); if (focusList) node.focus({ preventScroll: true }); }
       drawDetail();
@@ -1331,10 +1411,20 @@
       const item = currentItem();
       split.classList.toggle("has-detail", !!item);
       if (!item) {
-        detail.replaceChildren(items.length ? emptyState("layers", t("detail.pick.title"), t("detail.pick.text")) : emptyState("checkCircle", t("detail.clean.title"), t("detail.clean.text")));
+        if (items.length) detail.replaceChildren(emptyState("layers", t("detail.pick.title"), t("detail.pick.text")));
+        else if (filtered()) detail.replaceChildren(emptyState("search", t("detail.noMatch.title"), t("detail.noMatch.text"), h("button", { class: "btn", onClick: clearFilters }, t("list.clear"))));
+        else if (vs.accepted) detail.replaceChildren(emptyState("checkCircle", t("detail.noAccepted.title"), t("detail.noAccepted.text")));
+        else {
+          const doubtful = model.audited.filter((r) => r.content && r.content.state !== "ok").length;
+          detail.replaceChildren(emptyState("checkCircle", t("detail.clean.title"), plural(model.audited.length, "detail.clean.one", "detail.clean.many"),
+            doubtful ? h("p", { class: "warn-text" }, icon("alert"), plural(doubtful, "detail.clean.doubtful.one", "detail.clean.doubtful.many")) : null));
+        }
         return;
       }
       detail.replaceChildren(findingDetail(model, item, vs, {
+        hidden: !items.some((i) => i.key === item.key),
+        clear: clearFilters,
+        placesShown,
         back: () => { route.f = null; history.replaceState(null, "", link({ view: "run", run: route.run })); split.classList.remove("has-detail"); drawList(); },
         changed: async (nextKey) => { await reloadModel(nextKey); },
         redraw: () => drawDetail(),
@@ -1354,11 +1444,17 @@
       route.f = nextKey === undefined ? route.f : nextKey;
       history.replaceState(null, "", link({ view: "run", run: route.run, f: route.f }));
       drawList(); drawDetail();
-      const header = root.querySelector(".run-head");
-      if (header) header.replaceWith(runHeader(model, route.run));
+      root.querySelector(".run-head .head-counts")?.replaceWith(headCounts(model));
     }
 
-    search.addEventListener("input", debounce(() => { vs.text = search.value.trim().toLowerCase(); drawList(); }, 120));
+    const searchNow = () => { vs.text = search.value.trim().toLowerCase(); drawList(); };
+    search.addEventListener("input", debounce(searchNow, 120));
+    search.addEventListener("search", searchNow);
+    search.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      if (search.value || vs.text) { search.value = ""; searchNow(); } else search.blur();
+    });
     routeSelect.addEventListener("change", () => { vs.route = routeSelect.value; drawList(); });
     checkSelect.addEventListener("change", () => { vs.check = checkSelect.value; drawList(); });
     const onKey = (event) => {
@@ -1391,6 +1487,19 @@
     const tail = (selector || "").split(" > ").pop();
     return tail.length > 80 ? tail.slice(0, 77) + "…" : tail;
   }
+  // The last part of each selector, with more of the path wherever two would read the same.
+  function selectorLabels(selectors) {
+    const parts = selectors.map((sel) => (sel || "").split(" > "));
+    const labels = parts.map((p) => p[p.length - 1]);
+    for (let depth = 2; depth <= 5; depth++) {
+      const seen = new Map();
+      for (const label of labels) seen.set(label, (seen.get(label) || 0) + 1);
+      let longer = false;
+      labels.forEach((label, n) => { if (seen.get(label) > 1 && parts[n].length >= depth) { labels[n] = parts[n].slice(-depth).join(" > "); longer = true; } });
+      if (!longer) break;
+    }
+    return labels.map((label) => (label.length > 80 ? "…" + label.slice(-79) : label));
+  }
 
   // The width chart: how many findings sit at each width, stacked by severity.
   function widthChart(model, issues, picked, band, onPick) {
@@ -1409,17 +1518,18 @@
     const pct = (w) => ((Math.min(HI, Math.max(LO, w)) - LO) / (HI - LO)) * 100;
     const NS = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(NS, "svg");
-    svg.setAttribute("viewBox", `0 0 ${N} 44`);
+    const HT = 32;
+    svg.setAttribute("viewBox", `0 0 ${N} ${HT}`);
     svg.setAttribute("preserveAspectRatio", "none");
     svg.setAttribute("role", "img");
     svg.setAttribute("aria-label", t("chart.aria", { n: issues.length }));
-    svg.style.height = "44px";
+    svg.style.height = `${HT}px`;
     const layer = (cls, d, extra) => { const p = document.createElementNS(NS, "path"); p.setAttribute("d", d); p.setAttribute("class", cls); for (const [k, v] of Object.entries(extra || {})) p.setAttribute(k, v); svg.append(p); };
     if (band && band[0] !== undefined) {
       const x0 = (pct(band[0]) / 100) * N, x1 = Math.max(x0 + 0.6, (pct(band[1]) / 100) * N);
-      layer("sel", `M${x0} 0H${x1}V44H${x0}Z`);
+      layer("sel", `M${x0} 0H${x1}V${HT}H${x0}Z`);
     }
-    const y = (v) => 44 - (v / max) * 40;
+    const y = (v) => HT - (v / max) * (HT - 3);
     for (const s of SEVS) {
       let d = "";
       buckets.forEach((b, n) => {
@@ -1429,7 +1539,7 @@
       });
       if (d) layer("", d, { fill: `var(--${s.toLowerCase()})` });
     }
-    layer("base", `M0 44H${N}`, { "vector-effect": "non-scaling-stroke" });
+    layer("base", `M0 ${HT}H${N}`, { "vector-effect": "non-scaling-stroke" });
     const wrap = h("div", { style: { position: "relative" } }, svg);
     const axis = h("div", { style: { position: "relative", height: "18px" } });
     const labels = new Map([[LO, ""], [HI, ""]]);
@@ -1466,9 +1576,12 @@
       tip.style.top = "-6px";
     });
     svg.addEventListener("pointerleave", () => { cursor.style.display = "none"; tip.hidden = true; });
-    svg.addEventListener("click", (event) => onPick(widthAt(event).w));
-    const legend = h("div", { class: "legend" }, h("b", { text: t("chart.title") }), SEVS.map((s) => h("span", { class: s }, h("i"), s)));
-    return h("div", {}, legend, wrap, axis);
+    svg.addEventListener("click", (event) => {
+      const { w } = widthAt(event);
+      // a width without findings would only empty the list
+      onPick(issues.some((i) => lo(i) <= w && w <= hi(i)) ? w : null);
+    });
+    return h("div", {}, wrap, axis);
   }
 
   // ----- one finding (or one cause with all its places)
@@ -1486,17 +1599,23 @@
     const pageCount = new Set(all.map((i) => i.route)).size;
 
     const headline = h("div", { class: "headline" }, sev(item.severity, true),
-      agent ? badge(t("detail.agent"), "accent", "spark", t("detail.agent.title")) : badge(t("detail.measured"), null, null, t("detail.measured.title")),
+      agent ? badge(t("detail.agent"), "accent", "spark", t("detail.agent.title")) : null,
       first.accepted ? badge(t("detail.acceptedBadge"), "good", "check") : null,
       pageCount > 1 ? badge(plural(pageCount, "detail.onPages.one", "detail.onPages.many"), "accent", "layers") : all.length > 1 ? badge(t("detail.places", { n: all.length }), "accent", "layers") : null);
     node.append(h("button", { class: "btn sm ghost back", onClick: hooks.back }, icon("left"), t("detail.back")));
+    if (hooks.hidden) {
+      node.append(h("div", { class: "notice slim" }, icon("info"), h("div", { class: "grow", text: t("detail.hidden") }),
+        h("button", { class: "btn sm", onClick: hooks.clear }, t("list.clear"))));
+    }
     node.append(h("div", {}, headline, h("h2", { text: I18N.check(issue.check) }), h("p", { class: "msg", text: messageText(issue) })));
 
     // actions
     const actions = h("div", { class: "actions" });
+    let recheckButton = null;
     actions.append(h("button", { class: "btn primary", onClick: () => copy(fixPrompt(model, item, issue), t("toast.promptCopied")), title: t("detail.prompt.title") }, icon("spark"), t("detail.prompt")));
     if (IS_APP) {
-      actions.append(h("button", { class: "btn", onClick: () => startRecheck(model, item), title: t("detail.recheck.title") }, icon("recheck"), t("detail.recheck")));
+      recheckButton = h("button", { class: "btn", onClick: () => startRecheck(model, item), title: t("detail.recheck.title") }, icon("recheck"), t("detail.recheck"));
+      actions.append(recheckButton);
       if (first.accepted) actions.append(h("button", { class: "btn", onClick: () => unaccept(model, item, hooks) }, icon("undo"), t("detail.unaccept")));
       else actions.append(h("button", { class: "btn", "aria-expanded": String(vs.accepting === item.key), onClick: () => { vs.accepting = vs.accepting === item.key ? null : item.key; hooks.redraw(); } }, icon("checkCircle"), t("detail.accept")));
     } else {
@@ -1505,19 +1624,9 @@
     }
     node.append(actions);
     if (IS_APP && vs.accepting === item.key && !first.accepted) node.append(acceptForm(model, item, groupId || issue.id, vs, hooks));
-    if (IS_APP) node.append(recheckBox(model, ids));
+    if (IS_APP) node.append(recheckBox(model, ids, recheckButton));
 
-    // places, when one cause shows up in several
-    if (all.length > 1) {
-      node.append(h("div", {}, h("p", { class: "label", text: t("detail.places", { n: all.length }) }),
-        h("div", { class: "occ" }, all.slice(0, 40).map((i) => h("button", { "aria-pressed": String(i.id === issue.id), onClick: () => { vs.occ[item.key] = i.id; hooks.redraw(); } },
-          h("span", { class: "where" }, h("span", { class: "route", text: i.route + (i.state !== "default" ? ` · ${stateLabel(model, i.route, i.state)}` : "") }),
-            pageCount === 1 || all.length > new Set(all.map((x) => x.route + "|" + x.state)).size ? h("span", { class: "sel", text: shortSelector(i.selector) }) : null),
-          h("span", { class: "w", text: fmt.range(lo(i), hi(i)) }))),
-        all.length > 40 ? h("p", { class: "muted", text: t("detail.morePlaces", { n: all.length - 40 }) }) : null)));
-    }
-
-    // the screenshot
+    // the screenshot first: it shows the problem
     if (runtime) {
       node.append(h("div", {}, h("p", { class: "label", text: t("detail.error") }), h("div", { class: "copyable" }, h("code", { text: issue.message }),
         h("button", { class: "btn ghost icon sm", "aria-label": t("action.copy"), onClick: () => copy(issue.message) }, icon("copy")))));
@@ -1525,22 +1634,39 @@
       node.append(screenshotBlock(model, issue, vs, item));
     }
 
-    // facts
+    // where it is
     const facts = h("dl", { class: "facts" });
     const fact = (label, ...value) => facts.append(h("dt", { text: label }), h("dd", {}, value));
     const pageUrl = model.data.base_url ? model.data.base_url.replace(/\/$/, "") + issue.route : null;
-    fact(t("detail.page"), h("span", { class: "mono", text: issue.route }), pageUrl && !/[[\]]/.test(issue.route) ? [" ", h("a", { href: pageUrl, target: "_blank", rel: "noopener", title: pageUrl }, icon("external"))] : null);
+    fact(t("detail.page"), h("span", { class: "mono", text: issue.route }), pageUrl && !/[[\]]/.test(issue.route) ? [" ", h("a", { href: pageUrl, target: "_blank", rel: "noopener", title: pageUrl, "aria-label": t("detail.openPage") }, icon("external"))] : null);
     fact(t("detail.state"), stateLabel(model, issue.route, issue.state),
       (issue.also_in_states || []).length ? h("div", { class: "muted", text: t("detail.alsoIn", { states: issue.also_in_states.map((s) => stateLabel(model, issue.route, s)).join(", ") }) }) : null);
-    fact(t("detail.widths"), fmt.range(lo(issue), hi(issue)), issue.widths && issue.widths.length > 1 ? h("span", { class: "muted", text: ` · ${plural(issue.widths.length, "detail.measuredAt.one", "detail.measuredAt.many")}` }) : null);
-    if (!runtime && issue.selector && !agent) fact(t("detail.element"), h("div", { class: "copyable" }, h("code", { text: issue.selector }), h("button", { class: "btn ghost icon sm", "aria-label": t("action.copy"), onClick: () => copy(issue.selector, t("toast.selectorCopied")) }, icon("copy"))));
+    if (!runtime) fact(t("detail.widths"), fmt.range(lo(issue), hi(issue)), issue.widths && issue.widths.length > 1 ? h("span", { class: "muted", text: ` · ${plural(issue.widths.length, "detail.measuredAt.one", "detail.measuredAt.many")}` }) : null);
     const candidates = issue.source_candidates || [];
     if (candidates.length) {
-      fact(t("detail.source"), h("div", { class: "src-list" }, candidates.map((c) => h("div", {}, editorLink(model, c), c.reasons && c.reasons.length ? h("div", { class: "why", text: c.reasons.join(", ") }) : null)),
+      fact(t("detail.source"), h("div", { class: "src-list" }, candidates.map((c) => h("div", {}, editorLink(model, c), c.reasons && c.reasons.length ? h("div", { class: "why", text: c.reasons.map(sourceReason).join(", ") }) : null)),
         h("div", { class: "why", text: t("detail.source.note") })));
     }
+    if (!runtime && issue.selector && !agent) fact(t("detail.element"), h("div", { class: "copyable" }, h("code", { text: issue.selector }), h("button", { class: "btn ghost icon sm", "aria-label": t("action.copy"), onClick: () => copy(issue.selector, t("toast.selectorCopied")) }, icon("copy"))));
     if (first.accepted) fact(t("detail.accepted"), `${first.accepted.reason || "–"}${first.accepted.date ? ` · ${first.accepted.date}` : ""}`);
     node.append(facts);
+
+    // places, when one cause shows up in several: the first few, the rest on request
+    if (all.length > 1) {
+      const FEW = 5;
+      const open = hooks.placesShown[item.key] || all.findIndex((i) => i.id === issue.id) >= FEW;
+      const shown = open ? all.slice(0, 40) : all.slice(0, FEW);
+      const labels = selectorLabels(all.map((i) => i.selector));
+      const sameSpot = all.length > new Set(all.map((x) => x.route + "|" + x.state)).size;
+      node.append(h("div", {}, h("p", { class: "label", text: t("detail.places", { n: all.length }) }),
+        h("div", { class: "occ" }, shown.map((i) => h("button", { "aria-pressed": String(i.id === issue.id), onClick: () => { vs.occ[item.key] = i.id; hooks.redraw(); } },
+          h("span", { class: "where" }, h("span", { class: "route", text: i.route + (i.state !== "default" ? ` · ${stateLabel(model, i.route, i.state)}` : "") }),
+            pageCount === 1 || sameSpot ? h("span", { class: "sel", text: labels[all.indexOf(i)] }) : null),
+          h("span", { class: "w", text: RUNTIME_CHECKS.has(i.check) ? "" : fmt.range(lo(i), hi(i)) })))),
+        !open && all.length > FEW ? h("button", { class: "btn sm ghost more-places", onClick: () => { hooks.placesShown[item.key] = true; hooks.redraw(); } }, icon("down"), t("detail.allPlaces", { n: all.length })) : null,
+        open && all.length > 40 ? h("p", { class: "muted", text: t("detail.morePlaces", { n: all.length - 40 }) }) : null));
+    }
+
     node.append(h("div", { class: "tipbox" }, h("b", { text: t("detail.howToFix") }), " ", I18N.tip(issue.check)));
     return node;
   }
@@ -1562,7 +1688,7 @@
     const othersBtn = h("button", { class: "btn sm" });
     const bigBtn = h("button", { class: "btn sm icon", "aria-label": t("detail.fullscreen"), title: t("detail.fullscreen") }, icon("expand"));
     tools.append(widths, othersBtn, fitBtn, bigBtn);
-    box.append(h("p", { class: "label", text: t("detail.screenshot") }), tools, wrapEl, note);
+    box.append(h("p", { class: "label", text: t("detail.screenshot") }), tools, note, wrapEl);
 
     const inRange = (c) => lo(issue) !== undefined && c.width >= lo(issue) && c.width <= hi(issue);
     function show() {
@@ -1581,7 +1707,11 @@
       wrapEl.replaceChildren(stage);
       wrapEl.classList.add("loading-img");
       img.addEventListener("load", () => wrapEl.classList.remove("loading-img"), { once: true });
-      img.addEventListener("error", () => { wrapEl.classList.remove("loading-img"); wrapEl.replaceChildren(h("div", { class: "stage-empty", text: t("detail.shotMissing", { file: capture.file }) })); }, { once: true });
+      img.addEventListener("error", () => {
+        wrapEl.classList.remove("loading-img");
+        wrapEl.replaceChildren(h("div", { class: "stage-empty" }, icon("image"), h("div", { text: t("detail.shotMissing", { file: capture.file }) })));
+        note.textContent = ""; note.className = "stage-note";
+      }, { once: true });
       drawBoxes(stage, img, boxes, (rect, W) => {
         if (!rect) return;
         const scale = img.clientWidth / W;
@@ -1590,16 +1720,28 @@
         if (!vs.fit) wrapEl.scrollLeft = Math.max(0, rect.x * scale - wrapEl.clientWidth * 0.3);
       });
       const hasBox = boxes.some((b) => !b.other);
-      note.textContent = hasBox ? t("detail.boxNote", { w: capture.width, reasons: reasonText(capture.reasons) })
-        : issue.origin === "agent" ? t("detail.agentNoBox") : inRange(capture) ? t("detail.noBoxHere", { w: capture.width }) : t("detail.outside", { w: capture.width, range: fmt.range(lo(issue), hi(issue)) });
+      const outside = !hasBox && issue.origin !== "agent" && !inRange(capture);
+      note.className = `stage-note${outside ? " out" : ""}`;
+      note.replaceChildren(outside ? icon("info") : "", hasBox ? t("detail.boxNote", { w: capture.width, reasons: reasonText(capture.reasons) })
+        : issue.origin === "agent" ? t("detail.agentNoBox") : inRange(capture) ? t("detail.noBoxHere", { w: capture.width }) : t("detail.outside", { w: capture.width, range: fmt.range(lo(issue), hi(issue)) }));
       bigBtn.onclick = () => lightbox(caps.map((c) => ({ src: fileUrl(model, c.file), caption: `${issue.route} · ${stateLabel(model, issue.route, issue.state)} · ${c.width}px`,
         boxes: boxesAt(model, c, focus).filter((b) => !b.other || vs.others) })), caps.indexOf(capture));
     }
     fitBtn.addEventListener("click", () => { vs.fit = !vs.fit; fitBtn.setAttribute("aria-pressed", String(!vs.fit)); show(); });
     othersBtn.addEventListener("click", () => { vs.others = !vs.others; show(); });
-    widths.addEventListener("step", (event) => { const at = caps.indexOf(capture) + event.detail; if (at >= 0 && at < caps.length) { capture = caps[at]; show(); } });
+    widths.addEventListener("step", (event) => {
+      const at = caps.indexOf(capture);
+      const ahead = event.detail > 0 ? caps.slice(at + 1) : caps.slice(0, at).reverse();
+      const next = ahead.find(inRange) || ahead[0];  // the widths where it occurs first
+      if (next) { capture = next; show(); }
+    });
     show();
     return box;
+  }
+  function sourceReason(reason) {
+    const m = /^(class|component|defines) (.*)$/.exec(reason);
+    if (m) return t(`src.why.${m[1]}`, { name: m[2] });
+    return known(`src.why.${reason.replace(/\s+/g, "-")}`, reason);
   }
   function reasonText(reasons) {
     return (reasons || []).map((r) => known(`reason.${r}`, r)).join(", ");
@@ -1639,12 +1781,13 @@
       await refreshState();
     } catch (error) { toast("bad", error.message); }
   }
-  function recheckBox(model, ids) {
+  function recheckBox(model, ids, button) {
     const box = h("div", { "data-recheck": "1" });
     const wanted = new Set(ids);
     function draw() {
       const jobs = (S.state && S.state.jobs || []).filter((j) => j.kind === "recheck" && j.source === model.name && j.issue_ids.some((id) => wanted.has(id)));
       const job = jobs[0];
+      if (button) button.disabled = !!(job && ACTIVE.has(job.status));
       box.replaceChildren();
       if (!job || job.status === "cancelled") return;
       const p = job.progress || {};
@@ -1693,9 +1836,11 @@
   function recheckCommand(model, issues) {
     const dir = runDir(model).replace(/\/$/, "");
     const out = `${dir}-recheck`;
-    const routes = [...new Set(issues.map((i) => i.route))].map((r) => `--route ${r}`).join(" ");
+    const quote = (v) => (/^[\w./:@%+=,-]+$/.test(v) ? v : `'${v.replace(/'/g, "'\\''")}'`);
+    const routes = [...new Set(issues.map((i) => i.route))].map((r) => `--route ${quote(r)}`).join(" ");
     const widths = recheckWidths(issues, model.LO, model.HI).join(",");
-    return `ui-audit audit ${routes} --width ${widths} --output ${out}\nui-audit verify ${dir} ${out}`;
+    const states = issues.every((i) => i.state === "default") ? " --no-states" : "";
+    return `ui-audit audit --like ${quote(dir)} ${routes} --width ${widths}${states} --output ${quote(out)}\nui-audit verify ${quote(dir)} ${quote(out)}`;
   }
   function fixPrompt(model, item, issue) {
     const all = item.all || item.issues;
@@ -1723,30 +1868,38 @@
 
   function pagesTab(model, route, vs, body) {
     const data = model.data;
-    const table = h("table", { class: "table" }, h("thead", {}, h("tr", {}, [t("pages.page"), t("pages.result"), t("pages.findings"), t("pages.states"), t("pages.foundBy")].map((label) => h("th", { text: label })))));
-    const tbody = h("tbody");
-    for (const r of model.routes) {
+    const head = () => h("thead", {}, h("tr", {}, [t("pages.page"), t("pages.result"), t("pages.findings"), t("pages.states"), t("pages.foundBy")].map((label) => h("th", { text: label }))));
+    const row = (r) => {
       const ok = model.audited.includes(r);
       const issues = model.issues.filter((i) => i.route === r.path);
       const states = (data.states || []).filter((s) => s.route === r.path && s.id !== "default");
+      const names = states.map((s) => stateLabel(model, r.path, s.id));
       let result;
       if (!ok) result = r.loaded === false ? badge(t("pages.notLoaded"), "bad") : h("span", { class: "dim", text: t("pages.skipped", { why: skipText((r.status || "").replace(/^skipped: /, "")) }) });
       else if (r.content && r.content.state !== "ok") result = badge(known(`content.${r.content.state}`, r.content.state), "warn", "alert", contentDetail(r.content.detail || ""));
       else result = badge(t("pages.measured"), "good", "check");
-      tbody.append(h("tr", {},
+      return h("tr", {},
         h("td", {}, ok && issues.length ? h("a", { class: "path", href: link({ view: "run", run: route.run }), onClick: (e) => { e.preventDefault(); vs.route = r.path; vs.mode = "page"; go({ view: "run", run: route.run }); } }, r.path) : h("span", { class: "path", text: r.path })),
         h("td", {}, result),
         h("td", {}, ok ? countChips(counts(issues)) : h("span", { class: "dim", text: "–" })),
-        h("td", { title: states.map((s) => s.label).join("\n") }, ok ? (states.length ? `${states.length} · ${states.slice(0, 3).map((s) => s.label.replace(/^\w+: /, "")).join(", ")}${states.length > 3 ? " …" : ""}` : h("span", { class: "dim", text: t("pages.noStates") })) : ""),
-        h("td", { class: "dim nowrap", text: (r.discovered_by || []).map((d) => known(`found.${d}`, d)).join(", ") })));
+        h("td", { class: "states", title: names.join("\n") }, ok ? (names.length ? `${names.length} · ${names.slice(0, 3).join(", ")}${names.length > 3 ? " …" : ""}` : h("span", { class: "dim", text: t("pages.noStates") })) : ""),
+        h("td", { class: "dim nowrap", text: (r.discovered_by || []).map((d) => known(`found.${d}`, d)).join(", ") }));
+    };
+    // measured pages first, worst first; the skipped ones fold away
+    const measured = model.routes.filter((r) => model.audited.includes(r) || r.loaded === false);
+    const score = (r) => { const c = counts(model.issues.filter((i) => i.route === r.path)); return [c.P1, c.P2, c.P3]; };
+    measured.sort((a, b) => { const x = score(a), y = score(b); return y[0] - x[0] || y[1] - x[1] || y[2] - x[2] || a.path.localeCompare(b.path); });
+    const skipped = model.routes.filter((r) => !measured.includes(r));
+    const parts = [h("div", { class: "card table-card" }, h("table", { class: "table" }, head(), h("tbody", {}, measured.map(row))))];
+    if (skipped.length) {
+      parts.push(h("details", { class: "card skipped" }, h("summary", {}, icon("right"), plural(skipped.length, "pages.skippedN.one", "pages.skippedN.many"), h("span", { class: "muted", text: t("pages.skippedWhy") })),
+        h("div", { class: "table-wrap" }, h("table", { class: "table" }, head(), h("tbody", {}, skipped.map(row))))));
     }
-    table.append(tbody);
-    const extra = [];
-    if ((data.truncated_routes || []).length) extra.push(h("div", { class: "notice" }, icon("info"), h("div", { class: "grow" }, h("b", { text: plural(data.truncated_routes.length, "pages.truncated.one", "pages.truncated.many") }), " ", t("pages.truncated.text"),
-      h("div", { class: "mono", style: { marginTop: "6px", color: "var(--text-2)" }, text: data.truncated_routes.join("   ") }))));
-    if ((data.skipped_dynamic_routes || []).length) extra.push(h("div", { class: "notice" }, icon("info"), h("div", { class: "grow" }, h("b", { text: plural(data.skipped_dynamic_routes.length, "pages.dynamic.one", "pages.dynamic.many") }), " ", t("pages.dynamic.text"),
-      h("div", { class: "mono", style: { marginTop: "6px", color: "var(--text-2)" }, text: data.skipped_dynamic_routes.join("   ") }))));
-    body.replaceChildren(h("div", { class: "card table-card" }, table), extra.length ? h("div", { style: { display: "grid", gap: "8px", marginTop: "14px" } }, extra) : "");
+    const note = (count, one, many, text, list) => h("div", { class: "notice" }, icon("info"), h("div", { class: "grow" }, h("b", { text: plural(count, one, many) }), " ", text,
+      h("div", { class: "mono route-list", text: list.join("   ") })));
+    if ((data.truncated_routes || []).length) parts.push(note(data.truncated_routes.length, "pages.truncated.one", "pages.truncated.many", t("pages.truncated.text"), data.truncated_routes));
+    if ((data.skipped_dynamic_routes || []).length) parts.push(note(data.skipped_dynamic_routes.length, "pages.dynamic.one", "pages.dynamic.many", t("pages.dynamic.text"), data.skipped_dynamic_routes));
+    body.replaceChildren(h("div", { class: "pages-tab" }, parts));
     return {};
   }
 
@@ -1809,7 +1962,8 @@
         [t("info.states"), fmt.n((data.states || []).length)],
         [t("info.probes"), fmt.n(stats.probes)],
         [t("info.shots"), `${fmt.n((data.captures || []).length)} · ${fmt.bytes(stats.screenshot_bytes)}`],
-        [t("info.range"), `${vp.min_width || 320}–${vp.max_width || 1920} px${vp.widths && vp.widths.length ? ` · ${t("info.only", { w: vp.widths.join(", ") })}` : ` · ${t("info.step", { n: vp.sweep_step || 80 })}`}`],
+        [t("info.range"), `${vp.min_width || 320}–${vp.max_width || 1920} px · ${vp.widths && vp.widths.length ? t("info.only", { w: vp.widths.join(", ") })
+          : data.config && data.config.sweep === "key" ? t("info.keyWidths") : t("info.step", { n: vp.sweep_step || 80 })}`],
         [t("info.mode"), data.config && data.config.sweep === "key" ? t("tag.fast.title") : t("info.full")],
         [t("info.breakpoints"), (data.breakpoints || []).length ? data.breakpoints.join(", ") : "–"],
       ])),
@@ -1868,7 +2022,7 @@
       tiles.replaceChildren(...sections.filter(([k]) => k !== "needs_review" || result.needs_review.length).map(([key, label, kind, ic]) => h("button", { class: `ctile ${kind}`, "aria-pressed": String(showing.size === 1 && showing.has(key)),
         onClick: () => { showing = showing.size === 1 && showing.has(key) ? new Set(sections.map((s) => s[0])) : new Set([key]); drawTiles(); drawList(); } },
       h("div", { class: "k" }, icon(ic), label), h("div", { class: "v num", text: fmt.n(result[key].length) }))),
-      h("div", { class: "ctile", title: t("compare.outTitle") }, h("div", { class: "k" }, icon("info"), t("compare.out")), h("div", { class: "v num", text: fmt.n(result.out_of_scope) })));
+      h("div", { class: "ctile static", title: t("compare.outTitle") }, h("div", { class: "k" }, icon("info"), t("compare.out")), h("div", { class: "v num", text: fmt.n(result.out_of_scope) }), h("div", { class: "sub", text: t("compare.outShort") })));
     }
     function thumb(model, issue, label) {
       const capture = issue.widths && issue.widths.length ? nearestCapture(model, issue.route, issue.state, Math.round((lo(issue) + hi(issue)) / 2)) : null;
@@ -1886,11 +2040,11 @@
         list.append(h("div", { class: "diffs" }, result[key].slice(0, 150).map((issue) => {
           const runName = key === "fixed" ? base : current;
           return h("div", { class: "card diff" },
-            h("div", {}, h("div", { class: "t" }, sev(issue.severity), I18N.check(issue.check), h("span", { class: "muted", style: { fontWeight: "400" }, text: fmt.range(lo(issue), hi(issue)) })),
-              h("div", { class: "s", title: messageText(issue) }, h("a", { class: "mono", href: link({ view: "run", run: runName, f: `i:${issue.id}` }), text: issue.route }),
+            h("div", {}, h("div", { class: "t" }, sev(issue.severity), I18N.check(issue.check), RUNTIME_CHECKS.has(issue.check) ? null : h("span", { class: "muted", style: { fontWeight: "400" }, text: fmt.range(lo(issue), hi(issue)) })),
+              h("div", { class: "s", title: issue.message }, h("a", { class: "mono", href: link({ view: "run", run: runName, f: `i:${issue.id}` }), text: issue.route }),
                 issue.state !== "default" ? ` · ${stateLabel(key === "fixed" ? before : after, issue.route, issue.state)}` : "", " — ", messageText(issue)),
               RUNTIME_CHECKS.has(issue.check) ? null : h("code", { text: issue.selector, title: issue.selector })),
-            h("div", { class: "pair" }, thumb(before, issue, t("compare.beforeShort")), thumb(after, issue, t("compare.afterShort"))));
+            RUNTIME_CHECKS.has(issue.check) ? null : h("div", { class: "pair" }, thumb(before, issue, t("compare.beforeShort")), thumb(after, issue, t("compare.afterShort"))));
         })));
         if (result[key].length > 150) list.append(h("p", { class: "muted", text: t("compare.more", { n: result[key].length - 150 }) }));
       }
@@ -1898,7 +2052,7 @@
     }
     drawTiles();
     drawList();
-    main.append(tiles, h("p", { class: "muted", style: { fontSize: "13px", margin: "0 0 6px" }, text: t("compare.rule") }), list);
+    main.append(tiles, h("p", { class: "muted", style: { fontSize: "13px", margin: "0 0 6px" }, text: `${t("compare.tilesFilter")} ${t("compare.rule")}` }), list);
     return {};
   }
 

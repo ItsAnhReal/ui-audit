@@ -11,7 +11,7 @@ from importlib import resources
 from pathlib import Path
 
 from . import __version__
-from .config import CONFIG_FILENAME, ConfigError, load, render_template
+from .config import CONFIG_FILENAME, ConfigError, from_dict, load, render_template
 from .sources import SOURCE_EXTS
 
 SKILL_TARGETS = {
@@ -30,7 +30,16 @@ def _widths(text: str) -> list[int]:
 
 
 def _load_config(args):
-    cfg, path = load(Path(args.config) if getattr(args, "config", None) else None)
+    like = getattr(args, "like", None)
+    if like:  # the settings an earlier run was made with, as its report.json recorded them
+        report = Path(like) / "report.json"
+        if not report.is_file():
+            raise ConfigError(f"no report.json in {like}")
+        cfg, path = from_dict(json.loads(report.read_text(encoding="utf-8"))["config"]), None
+        if not getattr(args, "output", None):
+            cfg.output = str(Path(like)) + "-again"  # never write over the run it copies
+    else:
+        cfg, path = load(Path(args.config) if getattr(args, "config", None) else None)
     if getattr(args, "base_url", None):
         cfg.base_url = args.base_url
     if getattr(args, "project_root", None):
@@ -362,6 +371,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("audit", help="discover, sweep, capture and report")
     common(p)
     p.add_argument("base_url_pos", nargs="?", metavar="URL", help="shorthand for --base-url")
+    p.add_argument("--like", metavar="RUN_DIR", help="reuse the settings an earlier run was made with (other options override them)")
     p.add_argument("--route", action="append", help="audit only this route (repeatable)")
     p.add_argument("--width", type=_widths, help="exact widths, e.g. 389,390,391 (disables the sweep)")
     p.add_argument("--sweep-step", type=int, help="sweep step in px (default 80)")

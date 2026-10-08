@@ -50,6 +50,8 @@ ui-audit audit --route /pricing --width 767,768,769,834 --output .ui-audit/fix-1
 ui-audit verify .ui-audit/baseline .ui-audit/fix-1 --pixel-diff
 ```
 
+To re-check with the settings an earlier run used (app address, sign-in, language, setup), add `--like .ui-audit/baseline`; options you pass override them, and without `--output` the run goes to `.ui-audit/baseline-again`. The re-check commands in fix prompts use it.
+
 `verify` reports **fixed**, **introduced** and **persistent** issues. A baseline issue only counts as fixed if the new run probed its route, state and at least one of its widths; everything else is counted as out of scope. Agent findings only count as fixed after a new semantic review. Exit code 1 means a P1/P2 issue was introduced (`--strict` also fails on persistent ones).
 
 ### Agent skill
