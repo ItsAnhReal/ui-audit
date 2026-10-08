@@ -29,6 +29,7 @@ playwright install chromium      # or point --browser-path / UI_AUDIT_BROWSER_PA
 ui-audit init --base-url http://localhost:3000   # writes ui-audit.toml with routes found in your source
 ui-audit doctor                                   # Python, Chromium, config, app reachable, skills installed
 ui-audit audit --output .ui-audit/baseline        # full audit
+ui-audit ui                                       # or do all of it in the local app (below)
 ```
 
 Outputs in the output directory:
@@ -36,7 +37,7 @@ Outputs in the output directory:
 | File | What it is |
 |---|---|
 | `report.json` | Source of truth: routes, states, coverage, captures, issues with widths, selectors, evidence and source candidates, and `groups`: the issues folded by cause (one component broken on five routes is one group) |
-| `index.html` | Report viewer: findings grouped by route, a width map showing where they sit, filters, and a screenshot viewer. One self-contained file, no server |
+| `index.html` | Report viewer: findings by cause or by page, a width chart showing where they sit, filters, a screenshot viewer with the measured boxes, and a fix prompt to copy. One self-contained file, no server, English and German |
 | `shots/*.png` | Clean and annotated full-page screenshots (sideways overflow included) |
 | `semantic-review.md`, `semantic-packet.json` | A bounded packet (≤12 screenshots) for the agent's visual judgement |
 
@@ -59,6 +60,23 @@ ui-audit install-skill --scope user    # ~/.claude/skills and ~/.codex/skills
 ```
 
 The skill (`src/ui_audit/skill/SKILL.md`) tells the agent how to run the loop: baseline, semantic review, triage, patch, targeted rerun, verify, full regression, and when to stop.
+
+## The app
+
+```bash
+ui-audit ui                                   # http://127.0.0.1:8484, opens in your browser
+ui-audit ui --config .ui-audit/shop.toml      # another settings file; --runs DIR, --port N, --no-open
+```
+
+A local web app for the whole loop, started in your project folder. It lists every run in the runs folder (the parent of `output`, usually `.ui-audit/`) and lets you:
+
+- **start an audit**: quick (key widths), complete (every width) or just some pages and widths; pick the settings file, the app's language and a saved sign-in. *Sign in…* opens a browser window and saves the session next to the runs. Progress, time left and the log show while it runs; it can be cancelled.
+- **work through findings**: grouped by cause, filtered by severity, page, kind or width (click the width chart), with the screenshot at every captured width and the measured element boxed. Keyboard: `↑` `↓` move, `←` `→` widths, `/` search.
+- **hand a finding to your agent**: *Copy fix prompt* copies the problem, where it is, the likely source files, the screenshot path and the re-check commands.
+- **re-check a fix**: measures just those pages at the edges of where the finding was seen (and one pixel outside them) and says whether it is gone, using the same rule as `verify`.
+- **accept** a finding with a reason (written to `ui-audit.accepted.json`, so later runs keep it), **compare** two runs, open a run's folder, delete old runs.
+
+The server listens on 127.0.0.1 only, answers only to `127.0.0.1` and `localhost` host names, and requires a per-start token for every API call, so other websites cannot reach it. Each audit runs in its own process (`python -m ui_audit.runner`), one at a time.
 
 ## Checks
 

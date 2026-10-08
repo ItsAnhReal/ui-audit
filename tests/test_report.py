@@ -27,9 +27,18 @@ def test_viewer_inlines_only_what_it_reads(tmp_path):
     data = embedded(page)  # the "</script>" inside a message must not end the data block
     issue = data["issues"][0]
     assert issue["message"] == 'Text spills: "</script><b>"'
-    assert issue["source_candidates"] == [{"file": "src/a.tsx", "line": 3}]
+    assert issue["source_candidates"] == [{"file": "src/a.tsx", "line": 3, "reasons": ["class x"]}]
     assert issue["rects"] == {} and "hints" not in issue  # boxes only for widths that have a screenshot
-    assert data["config"] == {"viewports": {"min_width": 320, "max_width": 1920}}
+    assert data["config"] == {"viewports": {"min_width": 320, "max_width": 1920}, "sweep": "full", "signed_in": False}
+    assert data["groups"][0]["count"] == 1
+    assert '"token"' not in page  # a static report carries no app token
+
+
+def test_viewer_page_is_one_self_contained_file(tmp_path):
+    page = report.write_html(REPORT, tmp_path).read_text()
+    assert "/*__" not in page and "__REPORT_DATA__" not in page and "__APP_CONFIG__" not in page
+    assert "window.uiAuditI18n" in page and "Content-Security-Policy" not in page
+    assert "<script src" not in page and "<link rel=\"stylesheet\"" not in page
 
 
 def test_report_command_rebuilds_the_viewer(tmp_path, capsys):

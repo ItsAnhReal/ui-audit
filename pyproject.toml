@@ -21,7 +21,7 @@ ui-audit = "ui_audit.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-ui_audit = ["probe.js", "skill/SKILL.md", "report_template.html"]
+ui_audit = ["probe.js", "skill/SKILL.md", "ui/*.html", "ui/*.css", "ui/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

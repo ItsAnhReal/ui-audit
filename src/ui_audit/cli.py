@@ -114,38 +114,14 @@ def _open_viewer(path: Path) -> None:
 
 
 def cmd_accept(args) -> int:
-    from datetime import date
-
     from . import report as report_mod
-    from .issues import mark_accepted
 
-    out_dir = Path(args.report_dir)
-    report = report_mod.read_json(out_dir)
-    wanted = set(args.ids)
-    for group in report.get("groups", []):
-        if group["id"] in wanted:
-            wanted |= set(group["issue_ids"])
-    chosen = [i for i in report["issues"] if i["id"] in wanted]
-    if not chosen:
-        print(f"no issue or group in {out_dir} has the id(s): {', '.join(args.ids)}", file=sys.stderr)
-        return 2
-    config = report.get("config") or {}
-    path = Path(report["project_root"]) / config.get("accepted_file", "ui-audit.accepted.json")
     try:
-        entries = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        entries = []
-    known = {e.get("signature") for e in entries}
-    today = date.today().isoformat()
-    added = [{"signature": i["signature"], "check": i["check"], "route": i["route"], "reason": args.reason, "date": today}
-             for i in chosen if i["signature"] not in known]
-    path.write_text(json.dumps(entries + added, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    # The open report reflects the decision right away; later audits read the file.
-    mark_accepted(report["issues"], {e["signature"]: e for e in entries + added})
-    report["stats"]["issues"] = report_mod.summary_counts(report["issues"])
-    report_mod.write_json(report, out_dir)
-    report_mod.write_html(report, out_dir)
-    print(f"accepted {len(added)} finding(s) in {path}" + (f" ({len(chosen) - len(added)} were already accepted)" if len(added) < len(chosen) else ""))
+        added, already, path = report_mod.accept(Path(args.report_dir), args.ids, args.reason)
+    except LookupError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    print(f"accepted {added} finding(s) in {path}" + (f" ({already} were already accepted)" if already else ""))
     return 0
 
 
@@ -185,6 +161,25 @@ def cmd_report(args) -> int:
     return 0
 
 
+def cmd_ui(args) -> int:
+    from .server import Workspace, serve
+
+    try:
+        _, path = load(Path(args.config) if args.config else None)
+        if path is None:  # no ui-audit.toml: settings kept next to the runs, newest first
+            for candidate in sorted(Path(".ui-audit").glob("*.toml"), key=lambda p: p.stat().st_mtime, reverse=True):
+                try:
+                    load(candidate)
+                except (ConfigError, OSError, ValueError):
+                    continue
+                path = candidate.resolve()
+                break
+        workspace = Workspace(Path.cwd(), path, Path(args.runs) if args.runs else None)
+    except (ConfigError, OSError, ValueError) as exc:
+        print(f"config error: {exc}", file=sys.stderr)
+        return 2
+    serve(workspace, args.port, open_browser=not args.no_open)
+    return 0
 
 
 def _git_changed(project_root: str, ref: str) -> list[str]:
@@ -403,6 +398,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("report_dir", nargs="?", default=".ui-audit/latest")
     p.add_argument("--no-open", action="store_true", help="only rebuild index.html")
     p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser("ui", help="open the app: start audits, work through findings and compare runs in the browser")
+    p.add_argument("--config", help=f"path to {CONFIG_FILENAME} (default: search upwards)")
+    p.add_argument("--runs", help="folder the runs are kept in (default: where the configured output goes, .ui-audit)")
+    p.add_argument("--port", type=int, default=8484, help="port on 127.0.0.1 (default 8484, or any free one)")
+    p.add_argument("--no-open", action="store_true", help="do not open the browser")
+    p.set_defaults(func=cmd_ui)
 
     p = sub.add_parser("merge-findings", help="merge agent findings into a report")
     p.add_argument("report_dir")
