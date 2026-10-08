@@ -294,6 +294,32 @@
     if ((m = /^same page as (.*)$/.exec(why))) return t("skip.same", { as: m[1] });
     return why;
   }
+  // The probe measures in English; its known sentences are shown in the app's language. The fix prompt keeps the original.
+  const MESSAGES = [
+    [/^Page is (\d+)px wide in a (\d+)px viewport\.$/, "msg.pageWide", ["page", "vw"]],
+    [/^Extends to (\d+)px in a (\d+)px viewport \(page scrolls sideways by (\d+)px\)\.$/, "msg.extends", ["right", "vw", "by"]],
+    [/^Control is cut off at the (left|right) edge of a (\d+)px viewport\.$/, "msg.controlCut", ["edge", "vw"]],
+    [/^Content is cut off at the (left|right) edge of a (\d+)px viewport\.$/, "msg.contentCut", ["edge", "vw"]],
+    [/^Content is clipped by (\d+)px horizontally: "([^]*)"$/, "msg.clippedX", ["px", "text"]],
+    [/^Content is clipped by (\d+)px vertically: "([^]*)"$/, "msg.clippedY", ["px", "text"]],
+    [/^Text spills (\d+)px outside its box: "([^]*)"$/, "msg.spill", ["px", "text"]],
+    [/^Overlaps (.+) by (\d+)% of the smaller control\.$/, "msg.overlaps", ["other", "pct"]],
+    [/^Target is (\d+)×(\d+)px, under (\d+)×\d+px, and too close to "([^]*)"\.$/, "msg.target", ["w", "h", "min", "near"]],
+    [/^(\w+) has no accessible name\.$/, "msg.unnamed", ["tag"]],
+  ];
+  function messageText(issue) {
+    const raw = issue.message || "";
+    if (issue.origin === "agent" || RUNTIME_CHECKS.has(issue.check)) return raw;
+    for (const [pattern, key, names] of MESSAGES) {
+      const m = pattern.exec(raw);
+      if (!m) continue;
+      const vars = Object.fromEntries(names.map((name, n) => [name, m[n + 1]]));
+      if (vars.edge) vars.edge = t(`msg.edge.${vars.edge}`);
+      if (vars.other) vars.other = shortSelector(vars.other);
+      return t(key, vars);
+    }
+    return raw;
+  }
   function contentDetail(detail) {
     let m;
     if ((m = /^(\d+) characters of text, (\d+) controls?$/.exec(detail))) return t("content.thinDetail", { chars: fmt.n(+m[1]), controls: fmt.n(+m[2]) });
@@ -1196,7 +1222,7 @@
       if (vs.check && i.check !== vs.check) return false;
       if (!ignoreWidth && vs.width !== null && !(lo(i) <= vs.width && vs.width <= hi(i))) return false;
       if (vs.text) {
-        const hay = [i.message, i.selector, i.check, I18N.check(i.check), i.route, i.state, ...(i.source_candidates || []).map((c) => c.file)].join(" ").toLowerCase();
+        const hay = [i.message, messageText(i), i.selector, i.check, I18N.check(i.check), i.route, i.state, ...(i.source_candidates || []).map((c) => c.file)].join(" ").toLowerCase();
         if (!vs.text.split(/\s+/).every((word) => hay.includes(word))) return false;
       }
       return true;
@@ -1230,7 +1256,7 @@
         ? h("span", { class: "s" }, first.state !== "default" ? badge(stateLabel(model, first.route, first.state)) : null, h("span", { class: "route", text: shortSelector(first.selector) }))
         : h("span", { class: "s" }, h("span", { class: "route", text: routes[0] }), routes.length > 1 ? badge(t("list.morePages", { n: routes.length - 1 })) : null,
           item.issues.length > routes.length ? badge(`${item.issues.length}×`) : null, first.state !== "default" && routes.length === 1 ? badge(stateLabel(model, first.route, first.state)) : null),
-      vs.mode === "page" ? h("span", { class: "x", text: first.message }) : h("span", { class: "x", text: source || first.message }));
+      vs.mode === "page" ? h("span", { class: "x", text: messageText(first) }) : h("span", { class: "x", text: source || messageText(first) }));
       return node;
     }
     function drawList() {
@@ -1464,7 +1490,7 @@
       first.accepted ? badge(t("detail.acceptedBadge"), "good", "check") : null,
       pageCount > 1 ? badge(plural(pageCount, "detail.onPages.one", "detail.onPages.many"), "accent", "layers") : all.length > 1 ? badge(t("detail.places", { n: all.length }), "accent", "layers") : null);
     node.append(h("button", { class: "btn sm ghost back", onClick: hooks.back }, icon("left"), t("detail.back")));
-    node.append(h("div", {}, headline, h("h2", { text: I18N.check(issue.check) }), h("p", { class: "msg", text: issue.message })));
+    node.append(h("div", {}, headline, h("h2", { text: I18N.check(issue.check) }), h("p", { class: "msg", text: messageText(issue) })));
 
     // actions
     const actions = h("div", { class: "actions" });
@@ -1861,8 +1887,8 @@
           const runName = key === "fixed" ? base : current;
           return h("div", { class: "card diff" },
             h("div", {}, h("div", { class: "t" }, sev(issue.severity), I18N.check(issue.check), h("span", { class: "muted", style: { fontWeight: "400" }, text: fmt.range(lo(issue), hi(issue)) })),
-              h("div", { class: "s", title: issue.message }, h("a", { class: "mono", href: link({ view: "run", run: runName, f: `i:${issue.id}` }), text: issue.route }),
-                issue.state !== "default" ? ` · ${stateLabel(key === "fixed" ? before : after, issue.route, issue.state)}` : "", " — ", issue.message),
+              h("div", { class: "s", title: messageText(issue) }, h("a", { class: "mono", href: link({ view: "run", run: runName, f: `i:${issue.id}` }), text: issue.route }),
+                issue.state !== "default" ? ` · ${stateLabel(key === "fixed" ? before : after, issue.route, issue.state)}` : "", " — ", messageText(issue)),
               RUNTIME_CHECKS.has(issue.check) ? null : h("code", { text: issue.selector, title: issue.selector })),
             h("div", { class: "pair" }, thumb(before, issue, t("compare.beforeShort")), thumb(after, issue, t("compare.afterShort"))));
         })));
