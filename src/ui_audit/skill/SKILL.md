@@ -17,7 +17,7 @@ Discover → Sweep → Capture → Diagnose → Map to code → Patch → Target
 
 - The app must be running. Find the dev command (`package.json` scripts, README) and start it in the background if needed. Note the URL.
 - Run `ui-audit doctor --base-url <url>` once. If no `ui-audit.toml` exists, run `ui-audit init --base-url <url>` and review the routes it found.
-- If pages need a login, ask the user how to sign in, then save a Playwright storage state and set `storage_state` in `ui-audit.toml`. Never type real credentials you were not given.
+- If pages need a login, ask the user to run `ui-audit login --path <sign-in page>` themselves: it opens a browser window, they sign in, and the session is saved to `.ui-audit/auth.json`. Then set `storage_state` in `ui-audit.toml` or pass `--storage-state`. Never type real credentials you were not given.
 
 ### 2. Baseline
 

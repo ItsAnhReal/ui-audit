@@ -38,6 +38,8 @@ def _load_config(args):
         cfg.output = args.output
     if getattr(args, "browser_path", None):
         cfg.browser_path = args.browser_path
+    if getattr(args, "storage_state", None):
+        cfg.storage_state = args.storage_state
     return cfg, path
 
 
@@ -100,7 +102,50 @@ def cmd_doctor(args) -> int:
     return 0 if ok else 1
 
 
+def _open_viewer(path: Path) -> None:
+    import webbrowser
+
+    webbrowser.open(path.resolve().as_uri())
+
+
+def cmd_login(args) -> int:
+    from . import browser
+
+    try:
+        cfg, _ = _load_config(args)
+    except ConfigError as exc:
+        print(f"config error: {exc}", file=sys.stderr)
+        return 2
+    target = Path(args.save)
+    print(f"A browser window opens at {browser.url_for(cfg.base_url, args.path)}. Sign in there.")
+    try:
+        browser.save_session(cfg, target, args.path,
+                             wait=lambda: input("Press Enter here once you are signed in... "))
+    except (EOFError, KeyboardInterrupt):
+        print("\ncancelled; nothing saved", file=sys.stderr)
+        return 1
+    print(f"saved the signed-in session to {target}")
+    print(f'Use it with `storage_state = "{target}"` in ui-audit.toml or `ui-audit audit --storage-state {target}`.')
+    print("The file works like a password for that account: keep it out of version control.")
+    return 0
+
+
+def cmd_report(args) -> int:
+    from . import report as report_mod
+
+    out_dir = Path(args.report_dir)
+    if not (out_dir / report_mod.REPORT_JSON).is_file():
+        print(f"no report.json in {out_dir}; run `ui-audit audit --output {out_dir}` first", file=sys.stderr)
+        return 2
+    path = report_mod.write_html(report_mod.read_json(out_dir), out_dir)
+    print(f"report viewer: {path}")
+    if not args.no_open:
+        _open_viewer(path)
+    return 0
+
+
 def cmd_audit(args) -> int:
+    from . import report as report_mod
     from .audit import run
 
     try:
@@ -123,14 +168,21 @@ def cmd_audit(args) -> int:
 
     counts = result["stats"]["issues"]
     out = Path(cfg.output)
-    print(f"{counts['P1']} P1 · {counts['P2']} P2 · {counts['P3']} P3 across {len(result['routes'])} route(s), "
-          f"{len(result['states'])} state(s), {len(result['captures'])} screenshot(s), {result['stats']['probes']} probes "
-          f"in {result['stats']['seconds']}s")
+    audited = report_mod.audited_routes(result)
+    megabytes = result["stats"]["screenshot_bytes"] / 1_000_000
+    print(f"{counts['P1']} P1 · {counts['P2']} P2 · {counts['P3']} P3 across {len(audited)} route(s), "
+          f"{len(result['states'])} state(s), {len(result['captures'])} screenshot(s) ({megabytes:.1f} MB), "
+          f"{result['stats']['probes']} probes in {result['stats']['seconds']}s")
+    skipped = len(result["routes"]) - len(audited)
+    if skipped:
+        print(f"{skipped} route(s) skipped as not found or duplicate; see routes[].status in report.json")
     print(f"report: {out / 'report.json'}")
-    print(f"contact sheet: {out / 'index.html'}")
+    print(f"report viewer: {out / 'index.html'}")
     print(f"semantic review packet: {out / 'semantic-review.md'}")
     for error in result["errors"]:
         print(f"warning: {error}", file=sys.stderr)
+    if args.open:
+        _open_viewer(out / report_mod.REPORT_HTML)
     if args.fail_on:
         threshold = {"P1": ["P1"], "P2": ["P1", "P2"], "P3": ["P1", "P2", "P3"]}[args.fail_on]
         if any(counts[level] for level in threshold):
@@ -225,7 +277,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-annotate", action="store_true", help="skip annotated screenshots")
     p.add_argument("--fail-on", choices=["P1", "P2", "P3"], help="exit 2 if issues at or above this severity")
     p.add_argument("--quiet", action="store_true")
+    p.add_argument("--open", action="store_true", help="open the report viewer in the browser when done")
+    p.add_argument("--storage-state", help="signed-in session saved by `ui-audit login`")
     p.set_defaults(func=cmd_audit)
+
+    p = sub.add_parser("login", help="sign in once in a browser window and save the session for audits")
+    p.add_argument("--config", help="path to ui-audit.toml (default: search upwards)")
+    p.add_argument("--base-url", help="URL of the running app")
+    p.add_argument("--browser-path", help="Chromium executable (or set UI_AUDIT_BROWSER_PATH)")
+    p.add_argument("--path", default="/", help="page to open, e.g. /login (default /)")
+    p.add_argument("--save", default=".ui-audit/auth.json", help="where to save the session (default .ui-audit/auth.json)")
+    p.set_defaults(func=cmd_login)
+
+    p = sub.add_parser("report", help="rebuild the report viewer from report.json and open it")
+    p.add_argument("report_dir", nargs="?", default=".ui-audit/latest")
+    p.add_argument("--no-open", action="store_true", help="only rebuild index.html")
+    p.set_defaults(func=cmd_report)
 
     p = sub.add_parser("merge-findings", help="merge agent findings into a report")
     p.add_argument("report_dir")

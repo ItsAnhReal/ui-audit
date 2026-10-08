@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
+import json
 import re
 import urllib.error
 import urllib.request
@@ -22,6 +23,14 @@ ROUTER_PATTERNS = [
 ]
 
 
+FILE_ROUTERS = {"next", "nuxt", "astro", "gatsby", "@remix-run/dev", "vite-plugin-pages", "vike",
+                "unplugin-vue-router", "@react-router/fs-routes", "@tanstack/router-plugin", "@docusaurus/core"}
+CLIENT_ROUTERS = {"react-router", "react-router-dom", "vue-router", "wouter", "@tanstack/react-router",
+                  "@reach/router", "@solidjs/router", "preact-router"}
+# Truncation keeps the most trustworthy routes: source conventions are guesses.
+METHOD_RANK = {"cli": 0, "config": 0, "crawl": 1, "sitemap": 1, "source": 2, "default": 3}
+
+
 @dataclass
 class Route:
     path: str
@@ -33,6 +42,8 @@ class Discovery:
     routes: list[Route] = field(default_factory=list)
     skipped_dynamic: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    # Routes left unmeasured because max_routes was reached; the audit fills this in.
+    truncated: list[str] = field(default_factory=list)
 
     def add(self, path: str, method: str) -> None:
         for route in self.routes:
@@ -97,10 +108,31 @@ def _segments_to_route(segments: list[str]) -> tuple[str, bool]:
     return "/" + "/".join(kept), dynamic
 
 
+def uses_client_router_only(root: Path) -> bool:
+    """True when package.json names a client-side router and no file-based one.
+
+    In such apps `pages/` is just a folder of components: its file names are
+    not URLs, and the route table is the only source of truth.
+    """
+    try:
+        package = json.loads((root / "package.json").read_text(errors="ignore"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(package, dict):
+        return False
+    names: set[str] = set()
+    for key in ("dependencies", "devDependencies"):
+        section = package.get(key)
+        if isinstance(section, dict):
+            names.update(section)
+    return bool(names & CLIENT_ROUTERS) and not names & FILE_ROUTERS
+
+
 def routes_from_source(root: Path, samples: dict[str, str]) -> tuple[list[str], list[str]]:
     """Routes declared by common framework conventions under `root`."""
     found: list[str] = []
     dynamic: list[str] = []
+    file_routed_pages = not uses_client_router_only(root)
 
     def record(route: str, is_dynamic: bool) -> None:
         if not route:
@@ -125,7 +157,7 @@ def routes_from_source(root: Path, samples: dict[str, str]) -> tuple[list[str], 
                 record(*_segments_to_route(parts[len(base):-1]))
         # Next.js pages router, Nuxt, Astro
         for base, exts in ((["pages"], PAGE_EXTS | {".vue"}), (["src", "pages"], PAGE_EXTS | {".vue", ".astro"})):
-            if parts[: len(base)] == base and suffix in exts:
+            if file_routed_pages and parts[: len(base)] == base and suffix in exts:
                 inner = parts[len(base):-1]
                 if inner and inner[0] == "api":
                     continue
@@ -191,7 +223,11 @@ def crawl(page, base_url: str, depth: int, limit: int, exclude: list[str]) -> li
         for path in frontier:
             url = urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
             try:
-                page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                page.goto(url, wait_until="load", timeout=15000)
+                try:  # client-rendered apps add their links after the document has loaded
+                    page.wait_for_load_state("networkidle", timeout=3000)
+                except Exception:  # noqa: BLE001 - long-polling apps never go idle
+                    pass
                 hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.getAttribute('href'))")
             except Exception:  # noqa: BLE001 - a broken page must not stop discovery
                 continue
@@ -235,9 +271,14 @@ def discover(cfg, page=None, only: list[str] | None = None) -> Discovery:
         except Exception as exc:  # noqa: BLE001 - discovery must not fail on the sitemap
             result.errors.append(f"sitemap: {exc.__class__.__name__}")
     if "crawl" in methods and page is not None:
-        for path in crawl(page, cfg.base_url, rc.crawl_depth, rc.max_routes, rc.exclude):
+        for path in crawl(page, cfg.base_url, rc.crawl_depth, rc.max_routes * 2, rc.exclude):
             result.add(path, "crawl")
     if not result.routes:
         result.add("/", "default")
-    result.routes = [r for r in result.routes if not is_excluded(r.path, rc.exclude)][: rc.max_routes]
+    kept = [r for r in result.routes if not is_excluded(r.path, rc.exclude)]
+    # Every candidate is returned, most trustworthy first. max_routes counts routes that are
+    # measured, so the audit applies it: a route that turns out to be a redirect, a repeat or
+    # the not-found page costs one page load, not a place in the budget.
+    kept.sort(key=lambda r: min(METHOD_RANK.get(m, 3) for m in r.discovered_by))  # stable
+    result.routes = kept
     return result

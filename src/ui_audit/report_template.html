@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>UI audit report</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --paper: #f3f5f7; --sheet: #ffffff; --ink: #14202b; --soft: #55636f; --rule: #d5dbe1;
+  --steel: #2f5d8a; --steel-wash: #e4ecf4;
+  --p1: #d43d2a; --p2: #c98200; --p3: #6b6fb5;
+  --sans: "Avenir Next", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --paper: #0f151b; --sheet: #172029; --ink: #e3e9ef; --soft: #93a1ad; --rule: #2a3641;
+    --steel: #7fb0de; --steel-wash: #1c2b39; --p1: #f0705f; --p2: #e5a93a; --p3: #9ea2e6; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.5 var(--sans); }
+button, select, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--steel); outline-offset: 2px; }
+.page { max-width: 1180px; margin: 0 auto; padding: 28px 20px 80px; }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+.head { display: flex; flex-wrap: wrap; gap: 12px 32px; align-items: flex-end; justify-content: space-between; }
+.head h1 { margin: 0; font-size: 26px; font-weight: 650; letter-spacing: -0.01em; }
+.head p { margin: 2px 0 0; color: var(--soft); font-size: 13px; }
+.tally { display: flex; gap: 18px; margin: 0; padding: 0; list-style: none; }
+.tally li { display: flex; align-items: baseline; gap: 6px; }
+.tally b { font: 600 28px/1 var(--mono); }
+.tally span { font-size: 12px; font-weight: 700; letter-spacing: 0.06em; }
+.tally .P1 { color: var(--p1); } .tally .P2 { color: var(--p2); } .tally .P3 { color: var(--p3); }
+.facts { margin: 14px 0 0; color: var(--soft); font-size: 13px; }
+
+/* The width map: where along the width range the findings sit. */
+.map { margin: 26px 0 0; padding: 18px 20px 12px; background: var(--sheet); border: 1px solid var(--rule); border-radius: 6px; }
+.map h2 { margin: 0 0 2px; font-size: 14px; font-weight: 650; }
+.map p { margin: 0 0 14px; color: var(--soft); font-size: 13px; }
+.lanes { position: relative; cursor: crosshair; padding-left: 34px; }
+.lane { position: relative; height: 22px; border-bottom: 1px solid var(--rule); }
+.lane:first-child { border-top: 1px solid var(--rule); }
+.lane > i { position: absolute; left: -34px; top: 3px; font: 700 11px/16px var(--sans); letter-spacing: 0.06em; }
+.lane > span { position: absolute; top: 4px; height: 13px; min-width: 3px; border-radius: 2px; opacity: 0.34; }
+.lane.P1 > i { color: var(--p1); } .lane.P1 > span { background: var(--p1); }
+.lane.P2 > i { color: var(--p2); } .lane.P2 > span { background: var(--p2); }
+.lane.P3 > i { color: var(--p3); } .lane.P3 > span { background: var(--p3); }
+.scale { position: relative; height: 30px; margin-left: 34px; }
+.scale > span { position: absolute; top: 0; width: 1px; height: 6px; background: var(--soft); }
+.scale > span.bp { height: 10px; background: var(--steel); }
+.scale > b { position: absolute; top: 12px; transform: translateX(-50%); font: 400 11px/1 var(--mono); color: var(--soft); white-space: nowrap; }
+.scale > b.bp { color: var(--steel); }
+.cursor { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--ink); pointer-events: none; }
+
+.filters { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  margin: 22px -20px 0; padding: 10px 20px; background: var(--paper); border-bottom: 1px solid var(--rule); }
+.chip { padding: 5px 12px; border: 1px solid var(--rule); border-radius: 999px; background: var(--sheet); cursor: pointer; font-size: 13px; font-weight: 600; }
+.chip[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+.filters select, .filters input { padding: 5px 10px; border: 1px solid var(--rule); border-radius: 6px; background: var(--sheet); font-size: 13px; max-width: 220px; }
+.filters input { flex: 1 1 160px; }
+.filters .count { margin-left: auto; color: var(--soft); font-size: 13px; }
+
+.route { margin: 30px 0 10px; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.route h2 { margin: 0; font: 600 17px/1.3 var(--mono); word-break: break-all; }
+.route span { color: var(--soft); font-size: 13px; }
+.issue { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 0 14px; padding: 14px 16px; margin: 0 0 8px;
+  background: var(--sheet); border: 1px solid var(--rule); border-left-width: 4px; border-radius: 6px; }
+.issue.P1 { border-left-color: var(--p1); } .issue.P2 { border-left-color: var(--p2); } .issue.P3 { border-left-color: var(--p3); }
+.issue .sev { font: 700 13px/22px var(--sans); letter-spacing: 0.04em; }
+.issue.P1 .sev { color: var(--p1); } .issue.P2 .sev { color: var(--p2); } .issue.P3 .sev { color: var(--p3); }
+.issue h3 { margin: 0; font-size: 15px; font-weight: 600; line-height: 22px; }
+.issue h3 small { margin-left: 8px; font: 400 12px var(--mono); color: var(--soft); }
+.tag { margin-left: 8px; padding: 1px 7px; border: 1px solid var(--rule); border-radius: 999px; font-size: 11px; font-weight: 600; color: var(--soft); }
+.issue .where { margin: 6px 0 0; color: var(--soft); font-size: 13px; }
+.issue code { font: 12px/1.5 var(--mono); color: var(--soft); word-break: break-all; }
+.issue .src { margin: 6px 0 0; font-size: 13px; }
+.issue .src a { color: var(--steel); font-family: var(--mono); font-size: 12px; }
+.ruler { position: relative; height: 16px; margin: 10px 0 2px; }
+.ruler::before { content: ""; position: absolute; left: 0; right: 0; top: 7px; height: 1px; background: var(--rule); }
+.ruler > span { position: absolute; top: 4px; height: 7px; min-width: 3px; border-radius: 2px; background: currentColor; opacity: 0.3; }
+.ruler > i { position: absolute; top: 2px; width: 2px; height: 11px; margin-left: -1px; background: currentColor; }
+.issue.P1 .ruler { color: var(--p1); } .issue.P2 .ruler { color: var(--p2); } .issue.P3 .ruler { color: var(--p3); }
+.span { margin: 8px 0 0; font-size: 12px; color: var(--soft); }
+.span + .shots { margin-top: 4px; }
+.shots { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 0; }
+.shot { position: relative; width: 104px; height: 132px; padding: 0; border: 1px solid var(--rule); border-radius: 4px; overflow: hidden; background: var(--paper); cursor: zoom-in; }
+.shot img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; }
+.shot b { position: absolute; left: 0; bottom: 0; padding: 1px 5px; background: var(--ink); color: var(--paper); font: 400 11px/1.4 var(--mono); border-top-right-radius: 4px; }
+.empty { margin: 30px 0; padding: 28px; text-align: center; background: var(--sheet); border: 1px dashed var(--rule); border-radius: 6px; color: var(--soft); }
+.empty button { margin-left: 6px; }
+
+.fold { margin: 14px 0 0; background: var(--sheet); border: 1px solid var(--rule); border-radius: 6px; }
+.fold > summary { padding: 12px 16px; cursor: pointer; font-weight: 600; }
+.fold > div { padding: 0 16px 16px; }
+.fold table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.fold td, .fold th { text-align: left; padding: 5px 10px 5px 0; border-top: 1px solid var(--rule); vertical-align: top; }
+.fold th { color: var(--soft); font-weight: 600; border-top: 0; }
+.fold td:first-child { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+.fold .list { margin: 10px 0 0; color: var(--soft); font: 12px/1.7 var(--mono); word-break: break-all; }
+.fold h3 { margin: 18px 0 8px; font: 600 13px var(--mono); }
+.ok { color: var(--soft); } .skip { color: var(--p2); }
+
+dialog { width: min(96vw, 1100px); max-height: 94vh; padding: 0; border: 1px solid var(--rule); border-radius: 8px; background: var(--sheet); color: var(--ink); }
+dialog::backdrop { background: rgba(8, 14, 20, 0.72); }
+.viewer { display: flex; flex-direction: column; max-height: 94vh; }
+.viewer header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--rule); font-size: 13px; }
+.viewer header span { flex: 1; font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viewer .frame { overflow: auto; padding: 14px; background: var(--paper); text-align: center; }
+.viewer img { max-width: 100%; height: auto; border: 1px solid var(--rule); }
+.btn { padding: 4px 12px; border: 1px solid var(--rule); border-radius: 6px; background: var(--sheet); cursor: pointer; font-size: 13px; }
+.btn:disabled { opacity: 0.4; cursor: default; }
+a.btn { color: inherit; text-decoration: none; }
+@media (max-width: 640px) {
+  .issue { grid-template-columns: minmax(0, 1fr); }
+  .filters .count { margin-left: 0; width: 100%; }
+  .filters select, .filters input { max-width: none; flex: 1 1 140px; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="head">
+    <div><h1>UI audit</h1><p id="meta"></p></div>
+    <ul class="tally" id="tally"></ul>
+  </header>
+  <p class="facts" id="facts"></p>
+
+  <section class="map" aria-labelledby="map-title">
+    <h2 id="map-title">Where the findings sit</h2>
+    <p id="map-hint">Each bar is one finding, drawn across the widths where it was measured. Click a width to list what breaks there.</p>
+    <div class="lanes" id="lanes"></div>
+    <div class="scale" id="scale"></div>
+  </section>
+
+  <div class="filters" id="filters">
+    <button class="chip" data-sev="P1" aria-pressed="false">P1</button>
+    <button class="chip" data-sev="P2" aria-pressed="false">P2</button>
+    <button class="chip" data-sev="P3" aria-pressed="false">P3</button>
+    <select id="f-route" aria-label="Route"></select>
+    <select id="f-check" aria-label="Check"></select>
+    <input id="f-text" type="search" placeholder="Search message, selector or file" aria-label="Search findings">
+    <button class="chip" id="f-width" hidden></button>
+    <span class="count" id="count"></span>
+  </div>
+
+  <main id="issues"></main>
+
+  <details class="fold" id="routes-fold"><summary id="routes-summary"></summary><div id="routes"></div></details>
+  <details class="fold" id="gallery-fold"><summary id="gallery-summary"></summary><div id="gallery"></div></details>
+  <noscript><p class="empty">This report needs JavaScript. The same data is in report.json next to this file.</p></noscript>
+</div>
+
+<dialog id="viewer">
+  <div class="viewer">
+    <header>
+      <button class="btn" id="v-prev">Previous</button>
+      <button class="btn" id="v-next">Next</button>
+      <span id="v-caption"></span>
+      <a class="btn" id="v-open" target="_blank" rel="noopener">Open image</a>
+      <button class="btn" id="v-close">Close</button>
+    </header>
+    <div class="frame"><img id="v-img" alt=""></div>
+  </div>
+</dialog>
+
+<script type="application/json" id="report-data">__REPORT_DATA__</script>
+<script>
+(() => {
+  const R = JSON.parse(document.getElementById("report-data").textContent);
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, attrs, ...kids) => {
+    const node = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v === null || v === undefined || v === false) continue;
+      if (k === "class") node.className = v; else if (k === "text") node.textContent = v; else node.setAttribute(k, v);
+    }
+    for (const kid of kids.flat()) if (kid) node.append(kid);
+    return node;
+  };
+  const ORDER = { P1: 0, P2: 1, P3: 2 };
+  const issues = (R.issues || []).slice().sort((a, b) => (ORDER[a.severity] ?? 9) - (ORDER[b.severity] ?? 9));
+  const routes = R.routes || [];
+  const audited = routes.filter((r) => (r.status || "audited") === "audited" && r.loaded !== false);
+  const view = (R.config && R.config.viewports) || {};
+  const LO = view.min_width || 320, HI = view.max_width || 1920;
+  const pct = (w) => Math.max(0, Math.min(100, ((w - LO) / (HI - LO)) * 100));
+  const lo = (i) => Math.min(...(i.widths && i.widths.length ? i.widths : [LO]));
+  const hi = (i) => Math.max(...(i.widths && i.widths.length ? i.widths : [LO]));
+  const widthText = (i) => !i.widths || !i.widths.length ? "no width" : lo(i) === hi(i) ? `${lo(i)}px` : `${lo(i)}–${hi(i)}px`;
+  const shotWidth = (file) => { const m = /__(\d+)(__annotated)?\.png$/.exec(file); return m ? `${m[1]}px` : ""; };
+  const state = { sev: new Set(), route: "", check: "", text: "", width: null };
+
+  // Header
+  const host = (R.base_url || "").replace(/^https?:\/\//, "");
+  $("meta").textContent = `${host} · ${(R.created || "").replace("T", " ").replace(/\+00:00$/, " UTC")} · ui-audit ${R.version || ""}`;
+  document.title = `UI audit · ${host}`;
+  const counts = { P1: 0, P2: 0, P3: 0 };
+  for (const i of issues) counts[i.severity] = (counts[i.severity] || 0) + 1;
+  for (const sev of ["P1", "P2", "P3"]) $("tally").append(el("li", { class: sev }, el("b", { text: counts[sev] }), el("span", { text: sev })));
+  const stats = R.stats || {};
+  const facts = [`${audited.length} route${audited.length === 1 ? "" : "s"} measured`, `${(R.states || []).length} states`,
+    `${stats.probes || 0} widths probed`, `${(R.captures || []).length} screenshots`];
+  if (stats.screenshot_bytes) facts.push(`${(stats.screenshot_bytes / 1e6).toFixed(1)} MB on disk`);
+  if (stats.seconds) facts.push(`${Math.round(stats.seconds)} s`);
+  if (R.consent_dismissed) facts.push(`cookie banner closed with “${R.consent_dismissed}”`);
+  $("facts").textContent = facts.join(" · ");
+
+  // Filter controls
+  const option = (value, label) => el("option", { value, text: label });
+  $("f-route").append(option("", "All routes"), ...[...new Set(issues.map((i) => i.route))].sort().map((r) => option(r, r)));
+  $("f-check").append(option("", "All checks"), ...[...new Set(issues.map((i) => i.check))].sort().map((c) => option(c, c)));
+
+  const matches = (i, ignoreWidth) => {
+    if (state.sev.size && !state.sev.has(i.severity)) return false;
+    if (state.route && i.route !== state.route) return false;
+    if (state.check && i.check !== state.check) return false;
+    if (!ignoreWidth && state.width !== null && !(lo(i) <= state.width && state.width <= hi(i))) return false;
+    if (state.text) {
+      const hay = [i.message, i.selector, i.check, i.route, i.state, ...(i.source_candidates || []).map((c) => c.file)].join(" ").toLowerCase();
+      if (!hay.includes(state.text)) return false;
+    }
+    return true;
+  };
+
+  // Width map
+  function drawMap() {
+    const lanes = $("lanes");
+    lanes.replaceChildren();
+    for (const sev of ["P1", "P2", "P3"]) {
+      const lane = el("div", { class: `lane ${sev}` }, el("i", { text: sev }));
+      for (const i of issues) {
+        if (i.severity !== sev || !matches(i, true) || !i.widths || !i.widths.length) continue;
+        lane.append(el("span", { style: `left:${pct(lo(i))}%;width:${pct(hi(i)) - pct(lo(i))}%` }));
+      }
+      lanes.append(lane);
+    }
+    if (state.width !== null) lanes.append(el("div", { class: "cursor", style: `left:calc(34px + (100% - 34px) * ${pct(state.width) / 100})` }));
+  }
+  function drawScale() {
+    const scale = $("scale");
+    scale.replaceChildren();
+    const room = 46 / Math.max(scale.clientWidth, 1) * 100;  // a label needs about 46px
+    const marks = new Map([[LO, ""], [HI, ""]]);
+    for (const w of [390, 768, 1366]) if (w > LO && w < HI) marks.set(w, "");
+    for (const w of R.breakpoints || []) if (w >= LO && w <= HI) marks.set(w, "bp");
+    let last = -100;
+    for (const [w, kind] of [...marks].sort((a, b) => a[0] - b[0])) {
+      scale.append(el("span", { class: kind, style: `left:${pct(w)}%` }));
+      // The two ends are always labelled; anything too close to a neighbour or to the right end is not.
+      const fits = pct(w) - last >= room && (w === HI || 100 - pct(w) >= room);
+      if (w === LO || w === HI || fits) { scale.append(el("b", { class: kind, style: `left:${pct(w)}%`, text: w })); last = pct(w); }
+    }
+  }
+  if ((R.breakpoints || []).length) $("map-hint").append(" Blue ticks are the page's own CSS breakpoints.");
+  window.addEventListener("resize", drawScale);
+  $("lanes").addEventListener("click", (event) => {
+    const box = $("lanes").getBoundingClientRect();
+    const ratio = (event.clientX - box.left - 34) / (box.width - 34);
+    if (ratio < 0 || ratio > 1) return;
+    state.width = Math.round(LO + ratio * (HI - LO));
+    render();
+  });
+
+  // Findings
+  function sourceLink(candidate) {
+    const label = candidate.line ? `${candidate.file}:${candidate.line}` : candidate.file;
+    const root = (R.project_root || "").replace(/\/$/, "");
+    const absolute = candidate.file.startsWith("/") ? candidate.file : `${root}/${candidate.file}`;
+    return el("a", { href: `vscode://file${encodeURI(absolute)}${candidate.line ? ":" + candidate.line : ""}`, text: label, title: "Open in VS Code" });
+  }
+  function nearestCapture(i) {
+    const middle = (lo(i) + hi(i)) / 2;
+    let best = null;
+    for (const c of R.captures || []) {
+      if (c.route !== i.route || c.state !== i.state) continue;
+      if (!best || Math.abs(c.width - middle) < Math.abs(best.width - middle)) best = c;
+    }
+    return best && (best.annotated || best.file);
+  }
+  function card(i) {
+    const body = el("div", {});
+    const title = el("h3", {}, i.check, el("small", { text: widthText(i) }));
+    if (i.origin === "agent") title.append(el("span", { class: "tag", text: "agent review" }));
+    if (i.state && i.state !== "default") title.append(el("span", { class: "tag", text: `state: ${i.state}` }));
+    body.append(title, el("p", { class: "where", text: i.message }));
+    if (i.selector && i.selector !== i.message) body.append(el("code", { text: i.selector }));
+    if (i.widths && i.widths.length) {
+      const ruler = el("div", { class: "ruler", role: "img", "aria-label": `Measured at ${widthText(i)}` },
+        el("span", { style: `left:${pct(lo(i))}%;width:${pct(hi(i)) - pct(lo(i))}%` }));
+      for (const w of i.widths) ruler.append(el("i", { style: `left:${pct(w)}%` }));
+      body.append(ruler);
+    }
+    const candidates = (i.source_candidates || []).slice(0, 2);
+    if (candidates.length) {
+      const src = el("p", { class: "src" }, "Likely source: ");
+      candidates.forEach((c, n) => src.append(n ? ", " : "", sourceLink(c)));
+      body.append(src);
+    }
+    let evidence = i.evidence || [];
+    if (!evidence.length) {
+      // No screenshot was taken at an affected width: show the closest one of the same route and state.
+      const near = nearestCapture(i);
+      if (near) { evidence = [near]; body.append(el("p", { class: "span", text: "No screenshot at these widths. Closest one:" })); }
+    }
+    if (evidence.length) {
+      const shots = el("div", { class: "shots" });
+      evidence.slice(0, 8).forEach((file, n) => {
+        const button = el("button", { class: "shot", "aria-label": `Screenshot at ${shotWidth(file)}` },
+          el("img", { src: file, loading: "lazy", alt: "" }), el("b", { text: shotWidth(file) }));
+        button.addEventListener("click", () => openViewer(evidence, n, `${i.route} · ${i.check}`));
+        shots.append(button);
+      });
+      body.append(shots);
+    }
+    return el("article", { class: `issue ${i.severity}` }, el("div", { class: "sev", text: i.severity }), body);
+  }
+  function render() {
+    const shown = issues.filter((i) => matches(i, false));
+    const list = $("issues");
+    list.replaceChildren();
+    const groups = new Map();
+    for (const i of shown) { if (!groups.has(i.route)) groups.set(i.route, []); groups.get(i.route).push(i); }
+    const worst = (group) => Math.min(...group.map((i) => ORDER[i.severity] ?? 9));
+    for (const [route, group] of [...groups].sort((a, b) => worst(a[1]) - worst(b[1]) || b[1].length - a[1].length)) {
+      const tally = ["P1", "P2", "P3"].map((s) => [s, group.filter((i) => i.severity === s).length]).filter(([, n]) => n).map(([s, n]) => `${n} ${s}`).join(" · ");
+      list.append(el("div", { class: "route" }, el("h2", { text: route }), el("span", { text: tally })), ...group.map(card));
+    }
+    if (!shown.length) {
+      const filtered = state.sev.size || state.route || state.check || state.text || state.width !== null;
+      const empty = el("p", { class: "empty", text: filtered ? "Nothing matches these filters." : `No findings in ${audited.length} measured route${audited.length === 1 ? "" : "s"}.` });
+      if (filtered) { const clear = el("button", { class: "btn", text: "Clear filters" }); clear.addEventListener("click", reset); empty.append(clear); }
+      list.append(empty);
+    }
+    $("count").textContent = shown.length === issues.length ? `${issues.length} findings` : `${shown.length} of ${issues.length} findings`;
+    const chip = $("f-width");
+    chip.hidden = state.width === null;
+    chip.textContent = state.width === null ? "" : `At ${state.width}px · clear`;
+    for (const button of document.querySelectorAll("[data-sev]")) button.setAttribute("aria-pressed", state.sev.has(button.dataset.sev));
+    drawMap();
+  }
+  function reset() {
+    state.sev.clear(); state.route = ""; state.check = ""; state.text = ""; state.width = null;
+    $("f-route").value = ""; $("f-check").value = ""; $("f-text").value = "";
+    render();
+  }
+  for (const button of document.querySelectorAll("[data-sev]")) button.addEventListener("click", () => {
+    const sev = button.dataset.sev;
+    if (state.sev.has(sev)) state.sev.delete(sev); else state.sev.add(sev);
+    render();
+  });
+  $("f-route").addEventListener("change", (e) => { state.route = e.target.value; render(); });
+  $("f-check").addEventListener("change", (e) => { state.check = e.target.value; render(); });
+  $("f-text").addEventListener("input", (e) => { state.text = e.target.value.trim().toLowerCase(); render(); });
+  $("f-width").addEventListener("click", () => { state.width = null; render(); });
+
+  // Routes
+  const skipped = routes.filter((r) => !audited.includes(r));
+  const truncated = R.truncated_routes || [], dynamic = R.skipped_dynamic_routes || [];
+  $("routes-summary").textContent = `Routes: ${audited.length} measured` + (skipped.length ? `, ${skipped.length} skipped` : "") +
+    (truncated.length ? `, ${truncated.length} over the limit` : "") + (dynamic.length ? `, ${dynamic.length} need a sample` : "");
+  const table = el("table", {}, el("tr", {}, el("th", { text: "Route" }), el("th", { text: "Result" }), el("th", { text: "Found by" })));
+  for (const r of routes) {
+    const ok = audited.includes(r);
+    const result = ok ? `${issues.filter((i) => i.route === r.path).length} findings` : (r.loaded === false ? "could not load" : (r.status || "").replace(/^skipped: /, "skipped, "));
+    table.append(el("tr", {}, el("td", { text: r.path }), el("td", { class: ok ? "ok" : "skip", text: result }), el("td", { class: "ok", text: (r.discovered_by || []).join(", ") })));
+  }
+  $("routes").append(table);
+  if (truncated.length) $("routes").append(el("p", { class: "list", text: `Not measured, over max_routes: ${truncated.join("  ")}` }));
+  if (dynamic.length) $("routes").append(el("p", { class: "list", text: `Need a sample in [routes] samples: ${dynamic.join("  ")}` }));
+  for (const error of R.errors || []) $("routes").append(el("p", { class: "list skip", text: error }));
+
+  // All screenshots
+  const captures = R.captures || [];
+  $("gallery-summary").textContent = `All screenshots (${captures.length})`;
+  $("gallery-fold").hidden = !captures.length;
+  let galleryBuilt = false;
+  $("gallery-fold").addEventListener("toggle", () => {
+    if (galleryBuilt || !$("gallery-fold").open) return;
+    galleryBuilt = true;
+    const groups = new Map();
+    for (const c of captures) { const key = `${c.route} · ${c.state}`; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(c); }
+    for (const [key, group] of groups) {
+      const files = group.sort((a, b) => a.width - b.width).map((c) => c.annotated || c.file);
+      const shots = el("div", { class: "shots" });
+      files.forEach((file, n) => {
+        const button = el("button", { class: "shot", "aria-label": `Screenshot at ${shotWidth(file)}` },
+          el("img", { src: file, loading: "lazy", alt: "" }), el("b", { text: shotWidth(file) }));
+        button.addEventListener("click", () => openViewer(files, n, key));
+        shots.append(button);
+      });
+      $("gallery").append(el("h3", { text: key }), shots);
+    }
+  });
+
+  // Screenshot viewer
+  const viewer = $("viewer");
+  let viewing = { files: [], index: 0, label: "" };
+  function show() {
+    const file = viewing.files[viewing.index];
+    $("v-img").src = file;
+    $("v-img").alt = `${viewing.label} at ${shotWidth(file)}`;
+    $("v-open").href = file;
+    $("v-caption").textContent = `${viewing.label} · ${shotWidth(file)} · ${viewing.index + 1} of ${viewing.files.length}`;
+    $("v-prev").disabled = viewing.index === 0;
+    $("v-next").disabled = viewing.index === viewing.files.length - 1;
+  }
+  function step(by) {
+    const next = viewing.index + by;
+    if (next < 0 || next >= viewing.files.length) return;
+    viewing.index = next;
+    show();
+  }
+  function openViewer(files, index, label) { viewing = { files, index, label }; show(); viewer.showModal(); }
+  $("v-prev").addEventListener("click", () => step(-1));
+  $("v-next").addEventListener("click", () => step(1));
+  $("v-close").addEventListener("click", () => viewer.close());
+  viewer.addEventListener("click", (event) => { if (event.target === viewer) viewer.close(); });
+  viewer.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowLeft") step(-1);
+    if (event.key === "ArrowRight") step(1);
+  });
+
+  drawScale();
+  render();
+})();
+</script>
+</body>
+</html>

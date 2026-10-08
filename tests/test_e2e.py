@@ -83,3 +83,113 @@ def test_fix_is_verified_by_targeted_rerun(demo_site, tmp_path):
     diffs = verify.pixel_diffs(baseline, current, tmp_path / "baseline", tmp_path / "fix", tmp_path / "fix")
     changed = {d["width"]: d["changed_ratio"] for d in diffs}
     assert changed[880] > 0 and changed[790] == 0
+
+
+LAYERED = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Layered</title><style>
+body { margin: 0; font: 16px/1.5 sans-serif; }
+.field { position: relative; width: 280px; margin: 24px; }
+.field input { width: 100%; height: 44px; box-sizing: border-box; }
+.field button { position: absolute; right: 6px; top: 8px; width: 32px; height: 40px; }
+.legal { width: 170px; margin: 24px; }
+.tight { margin: 24px; width: 200px; height: 20px; line-height: 28px; font-size: 14px; overflow: hidden; }
+.row { position: relative; width: 240px; margin: 24px; }
+.row a { display: block; height: 40px; line-height: 40px; }
+.row button { position: absolute; right: 4px; top: 8px; width: 24px; height: 24px; }
+main a { display: block; width: 200px; height: 44px; margin: 720px 24px 0; }
+.bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 16px; background: #eee; }
+.bar button { width: 100%; height: 48px; }
+</style></head><body>
+<div class="field"><input aria-label="Password" type="password"><button aria-label="Show password">o</button></div>
+<p class="legal">By continuing you accept the <a href="/pricing.html">terms of service agreement</a> and the
+<a href="/dashboard.html">privacy and data policy</a>.</p>
+<p class="tight">Leading only</p>
+<div class="row"><a href="/dashboard.html">Menu</a><button aria-label="Show sub-items">v</button></div>
+<main><a href="/pricing.html">See pricing</a></main>
+<div class="bar"><button>Accept cookies</button></div>
+</body></html>"""
+
+
+def test_adornments_and_pinned_bars_are_not_overlaps(demo_site, tmp_path):
+    url, site = demo_site
+    (site / "layered.html").write_text(LAYERED)
+    cfg = config(url, site, tmp_path / "run", routes={"include": ["/layered.html"]}, states={"auto": False},
+                 viewports={"widths": [390, 1366]})
+    report = audit.run(cfg, log=lambda _: None)
+    assert report["coverage"]["/layered.html|default"] == [390, 1366]
+    assert not found(report, "overlapping-controls", "/layered.html")
+    # A line box taller than its clipping box loses leading, not letters.
+    assert not found(report, "clipped-content", "/layered.html")
+
+
+def test_not_found_and_repeated_routes_are_skipped(demo_site, tmp_path):
+    url, site = demo_site
+    (site / "plans.html").write_text((site / "pricing.html").read_text())
+    included = ["/pricing.html", "/plans.html", "/missing.html"]
+    cfg = config(url, site, tmp_path / "run", routes={"include": included}, states={"auto": False},
+                 viewports={"widths": [390]})
+    report = audit.run(cfg, log=lambda _: None)
+    status = {r["path"]: r["status"] for r in report["routes"]}
+    assert status == {"/pricing.html": "audited", "/plans.html": "skipped: same page as /pricing.html",
+                      "/missing.html": "skipped: not found"}
+    assert {i["route"] for i in report["issues"]} == {"/pricing.html"}
+    assert report["stats"]["screenshot_bytes"] > 0
+
+    # A targeted rerun audits what it is told to, so verify can trust its coverage.
+    rerun = audit.run(cfg, only_routes=["/plans.html"], log=lambda _: None)
+    assert [r["status"] for r in rerun["routes"]] == ["audited"]
+
+
+CONSENT = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Consent</title><style>
+body { margin: 0; font: 16px/1.5 sans-serif; }
+main a { display: block; width: 220px; height: 44px; margin: 700px 24px 0; }
+#banner { position: fixed; left: 0; right: 0; bottom: 0; padding: 16px; background: #eee; }
+#banner button { height: 44px; }
+</style></head><body>
+<main><a href="/pricing.html">See pricing</a></main>
+<div id="banner"><p>We use cookies to measure visits.</p>
+<button id="all">Accept all</button> <button id="few">Only necessary</button></div>
+<script>
+const banner = document.getElementById("banner");
+if (localStorage.getItem("consent")) banner.remove();
+for (const id of ["all", "few"]) document.getElementById(id).onclick = () => { localStorage.setItem("consent", id); banner.remove(); };
+</script></body></html>"""
+
+
+def test_consent_banner_is_declined_once_and_setup_actions_run(demo_site, tmp_path):
+    url, site = demo_site
+    (site / "consent.html").write_text(CONSENT)
+    cfg = config(url, site, tmp_path / "run", routes={"include": ["/pricing.html", "/consent.html"]},
+                 states={"auto": False}, viewports={"widths": [390]}, setup=[{"click": "#no-such-button"}])
+    report = audit.run(cfg, log=lambda _: None)
+    # The banner only exists on the second route; the optional cookies are turned down, never accepted.
+    assert report["consent_dismissed"] == "Only necessary"
+    assert report["coverage"]["/consent.html|default"] == [390]
+    assert report["errors"] == ["setup: action 1 could not run ({'click': '#no-such-button'})"]
+
+    kept = audit.run(config(url, site, tmp_path / "kept", routes={"include": ["/consent.html"]},
+                            states={"auto": False, "dismiss_consent": False}, viewports={"widths": [390]}),
+                     log=lambda _: None)
+    assert kept["consent_dismissed"] is None
+
+
+def test_max_routes_counts_measured_routes_only(demo_site, tmp_path):
+    url, site = demo_site
+    included = ["/missing.html", "/pricing.html", "/dashboard.html"]
+    cfg = config(url, site, tmp_path / "run", routes={"include": included, "max_routes": 1},
+                 states={"auto": False}, viewports={"widths": [390]})
+    report = audit.run(cfg, log=lambda _: None)
+    assert {r["path"]: r["status"] for r in report["routes"]} == {
+        "/missing.html": "skipped: not found", "/pricing.html": "audited"}
+    assert report["truncated_routes"] == ["/dashboard.html"]
+
+
+def test_saved_session_is_reused_by_the_audit(demo_site, tmp_path):
+    from ui_audit import browser
+
+    url, site = demo_site
+    cfg = config(url, site, tmp_path / "run", routes={"include": ["/pricing.html"]}, states={"auto": False},
+                 viewports={"widths": [390]})
+    saved = browser.save_session(cfg, tmp_path / "auth" / "session.json", "/", wait=lambda: None, headless=True)
+    assert saved.stat().st_mode & 0o777 == 0o600
+    cfg.storage_state = str(saved)
+    assert audit.run(cfg, log=lambda _: None)["coverage"]["/pricing.html|default"] == [390]

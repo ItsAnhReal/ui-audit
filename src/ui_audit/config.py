@@ -29,6 +29,8 @@ class RouteConfig:
     samples: dict[str, str] = field(default_factory=dict)
     max_routes: int = 25
     crawl_depth: int = 2
+    # Skip routes that render the app's not-found page, redirect to, or repeat a route already audited.
+    dedupe: bool = True
 
 
 @dataclass
@@ -39,6 +41,8 @@ class StateConfig:
     custom: list[dict[str, Any]] = field(default_factory=list)
     # Extra words that mark a trigger as unsafe to click automatically.
     unsafe_words: list[str] = field(default_factory=list)
+    # Turn optional cookies down once, so a consent banner does not cover every page.
+    dismiss_consent: bool = True
 
 
 @dataclass
@@ -71,6 +75,8 @@ class Config:
     storage_state: str = ""
     browser_path: str = ""
     settle_ms: int = 150
+    # Actions run once on "/" before anything is measured, e.g. [{click = "#close-promo"}].
+    setup: list[dict[str, Any]] = field(default_factory=list)
     routes: RouteConfig = field(default_factory=RouteConfig)
     states: StateConfig = field(default_factory=StateConfig)
     viewports: ViewportConfig = field(default_factory=ViewportConfig)
@@ -150,17 +156,21 @@ annotate = true
 storage_state = ""
 # Chromium executable; leave empty to use Playwright's own browser.
 browser_path = ""
+# Actions run once on "/" before anything is measured.
+# setup = [{{ click = "#close-promo" }}]
 
 [routes]
 include = {include}
 exclude = ["/logout*", "/signout*", "/api/*"]
 discover = ["config", "source", "sitemap", "crawl"]
 max_routes = 25
+dedupe = true
 # samples = {{ "/blog/[slug]" = "/blog/hello-world" }}
 
 [states]
 auto = true
 max_per_route = 4
+dismiss_consent = true
 # [[states.custom]]
 # name = "cart-open"
 # route = "/"

@@ -59,6 +59,30 @@ def apply(page, cfg, state: State, width: int, height: int) -> bool:
     return True
 
 
+def dismiss_consent(page, cfg) -> str | None:
+    """Turn optional cookies down if a consent banner is showing; returns the button's label."""
+    try:
+        found = page.evaluate("() => window.__uiAudit.consentDecline()")
+        if not found:
+            return None
+        page.locator(found["selector"]).first.click(timeout=3000)
+        browser.settle(page, cfg.settle_ms)
+    except Exception:  # noqa: BLE001 - a banner that cannot be closed is audited as it is
+        return None
+    return found["label"]
+
+
+def run_setup(page, cfg) -> list[str]:
+    """Run the configured setup actions on "/"; returns one message per action that failed."""
+    if not cfg.setup:
+        return []
+    browser.load(page, cfg.base_url, "/", 1280, 900, cfg.settle_ms)
+    failed = [f"setup: action {n} could not run ({action})" for n, action in enumerate(cfg.setup, 1)
+              if not _run_action(page, action)]
+    browser.settle(page, cfg.settle_ms)
+    return failed
+
+
 def _run_action(page, action: dict) -> bool:
     try:
         if "click" in action:

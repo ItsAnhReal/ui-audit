@@ -36,9 +36,11 @@ Outputs in the output directory:
 | File | What it is |
 |---|---|
 | `report.json` | Source of truth: routes, states, coverage, captures, issues with widths, selectors, evidence and source candidates |
-| `index.html` | Contact sheet: issue table and screenshot grid per route and state |
+| `index.html` | Report viewer: findings grouped by route, a width map showing where they sit, filters, and a screenshot viewer. One self-contained file, no server |
 | `shots/*.png` | Clean and annotated full-page screenshots (sideways overflow included) |
 | `semantic-review.md`, `semantic-packet.json` | A bounded packet (≤12 screenshots) for the agent's visual judgement |
+
+Look at a report with `ui-audit report .ui-audit/baseline` (rebuilds `index.html` from `report.json` and opens it), or pass `--open` to `audit`.
 
 After a fix, rerun only what changed and compare:
 
@@ -64,10 +66,10 @@ The skill (`src/ui_audit/skill/SKILL.md`) tells the agent how to run the loop: b
 |---|---|---|
 | `horizontal-overflow` | P1 | The page scrolls sideways; reports the top-most element that sticks out |
 | `offscreen-control` / `offscreen-content` | P1 / P2 | A control or text is cut off at the viewport edge |
-| `clipped-content` | P2 | A box with hidden overflow cuts off its text (ellipsis and line-clamp are treated as intentional) |
+| `clipped-content` | P2 | A box with hidden overflow cuts into the letters of its text (lost line spacing alone does not count; ellipsis and line-clamp are treated as intentional) |
 | `text-spill` | P3 | Text visibly overflows its box |
-| `overlapping-controls` | P2 | Two interactive controls overlap by ≥20% (menus and dialogs layered on purpose are excluded) |
-| `small-target` | P2 below 768px, else P3 | Pointer target smaller than 24×24px (WCAG 2.5.8); inline text links excluded |
+| `overlapping-controls` | P2 | Two interactive controls overlap by ≥20% (menus and dialogs layered on purpose, fixed or sticky bars over scrolling content, buttons inside a text field, small actions laid over a larger row, and wrapped inline links are excluded) |
+| `small-target` | P2 below 768px, else P3 | Pointer target smaller than 24×24px and closer than the WCAG 2.5.8 spacing exception allows to another target; inline text links excluded |
 | `unnamed-control` | P2 | No accessible name |
 | `console-error`, `failed-resource` | P2 | Runtime errors while loading or entering a state |
 | `semantic-*` | agent-assigned | Findings merged from the agent's review, labelled `origin: agent` |
@@ -87,9 +89,32 @@ actions = [{ click = "#cart" }, { wait_for = ".cart-drawer" }]
 
 Actions: `click`, `hover`, `fill` + `value`, `press`, `wait`, `wait_for`. For logged-in pages, save a Playwright storage state and set `storage_state`.
 
+## Pages behind a login
+
+```bash
+ui-audit login --path /auth          # opens a browser window; sign in, then press Enter in the terminal
+ui-audit audit --storage-state .ui-audit/auth.json
+```
+
+`login` saves the browser's cookies and local storage to `.ui-audit/auth.json` (or `--save <file>`); set `storage_state` in `ui-audit.toml` to use it on every run. You type the password yourself, in the browser; `ui-audit` never sees or stores it. The saved file works like a password for that account, so keep `.ui-audit/` out of version control, and sign in again when the session expires.
+
+## Consent banners and setup
+
+A cookie banner sits on top of every page and hides what is under it. With `[states] dismiss_consent = true` (the default) `ui-audit` looks for the banner's button that turns optional cookies down ("Only necessary", "Reject", "Ablehnen", …), clicks it once, and audits the pages a returning visitor sees. It never clicks "Accept all". The label it clicked is recorded as `consent_dismissed` in `report.json`. Set it to `false` to audit the first-visit view with the banner open.
+
+For anything else that has to be out of the way first, list actions in `setup`; they run once on `/` before anything is measured:
+
+```toml
+setup = [{ click = "#close-promo" }]
+```
+
 ## Routes
 
 Discovered from `[routes] include`, framework conventions in `project_root` (Next.js app and pages routers, Nuxt, Astro, SvelteKit, React Router route tables, static `*.html`), `sitemap.xml`, and a same-origin crawl. Dynamic routes are listed as skipped until you give a sample in `[routes] samples`.
+
+In a project whose `package.json` names a client-side router (React Router, Vue Router, …) and no file-based one, `pages/` is a folder of components, so its file names are not treated as URLs; only the route table counts.
+
+With `dedupe = true` (the default) a route is skipped, and marked in `routes[].status`, when it renders the app's not-found page, redirects to a route already audited, or renders the same page as one. `--route` reruns never skip. `max_routes` counts routes that are measured: a skipped route costs one page load, not a place in the budget. Configured and crawled routes go first, source guesses last, and whatever is left when the budget is used up is listed in `truncated_routes`.
 
 ## Source hints
 

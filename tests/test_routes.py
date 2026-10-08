@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from ui_audit.routes import is_excluded, normalize, routes_from_source, same_origin_links
+from ui_audit.config import from_dict
+from ui_audit.routes import discover, is_excluded, normalize, routes_from_source, same_origin_links
 
 
 def touch(root: Path, rel: str, text: str = "") -> None:
@@ -58,3 +59,27 @@ def test_pages_router_sveltekit_static_and_react_router(tmp_path):
 def test_same_origin_links():
     hrefs = ["/a", "b", "#top", "mailto:x@y", "https://other.test/x", "/file.pdf", "http://app.test/c/"]
     assert same_origin_links("http://app.test", "http://app.test/dir/page", hrefs) == ["/a", "/dir/b", "/c"]
+
+
+def test_client_router_app_ignores_page_file_names(tmp_path):
+    touch(tmp_path, "package.json", '{"dependencies": {"react-router-dom": "^6"}, "devDependencies": {"vite": "^5"}}')
+    touch(tmp_path, "src/pages/AccountBilling.tsx")
+    touch(tmp_path, "src/pages/Index.tsx")
+    touch(tmp_path, "src/App.tsx", '<Route path="/billing" element={<AccountBilling/>} />')
+    found, _ = routes_from_source(tmp_path, {})
+    assert found == ["/billing"]
+
+    # With a file-based router next to it, src/pages is the route table again.
+    touch(tmp_path, "package.json", '{"dependencies": {"react-router-dom": "^6", "astro": "^4"}}')
+    found, _ = routes_from_source(tmp_path, {})
+    assert set(found) == {"/AccountBilling", "/Index", "/billing"}
+
+
+def test_configured_routes_rank_before_source_guesses(tmp_path):
+    touch(tmp_path, "pages/a.tsx")
+    touch(tmp_path, "pages/b.tsx")
+    cfg = from_dict({"project_root": str(tmp_path),
+                     "routes": {"include": ["/z"], "discover": ["source", "config"], "max_routes": 2}})
+    result = discover(cfg)
+    # Ranked, not cut: the audit spends max_routes on routes it actually measures.
+    assert [r.path for r in result.routes] == ["/z", "/a", "/b"]

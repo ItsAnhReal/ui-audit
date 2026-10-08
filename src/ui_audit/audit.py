@@ -14,6 +14,7 @@ from .sources import SourceIndex
 
 NOT_APPLICABLE = frozenset({"<state not applicable>"})
 SWEEP_SETTLE_MS = 60
+CANDIDATE_FACTOR = 8
 
 
 def _file_slug(route: str) -> str:
@@ -27,6 +28,33 @@ def _probe_opts(cfg: Config) -> dict:
         "maxPerCheck": cfg.checks.max_issues_per_check,
         "ignoreSelectors": cfg.checks.ignore_selectors,
     }
+
+
+def _skip_reason(page, response, path: str, missing: str | None, seen_pages: dict[str, str],
+                 seen_paths: dict[str, str]) -> str | None:
+    """Why a freshly loaded route adds nothing to the audit, or None if it should be audited."""
+    fingerprint = page.evaluate("() => window.__uiAudit.pageFingerprint()")
+    landed = routes.normalize(page.url)
+    if path != "/" and (fingerprint == missing or (response is not None and response.status == 404)):
+        return "not found"
+    if landed != path and landed in seen_paths:
+        return f"redirects to {seen_paths[landed]}"
+    # A blank page (still loading, or empty by design) identifies nothing.
+    if not fingerprint.startswith("0:") and fingerprint in seen_pages:
+        return f"same page as {seen_pages[fingerprint]}"
+    seen_pages.setdefault(fingerprint, path)
+    seen_paths.setdefault(landed, path)
+    seen_paths.setdefault(path, path)
+    return None
+
+
+def _missing_fingerprint(page, cfg: Config) -> str | None:
+    """What the app renders for a URL it does not know (single-page apps answer 200)."""
+    try:
+        browser.load(page, cfg.base_url, "/__ui-audit-missing-route__", 1280, 900, cfg.settle_ms)
+        return page.evaluate("() => window.__uiAudit.pageFingerprint()")
+    except Exception:  # noqa: BLE001 - without a reference, nothing is treated as not found
+        return None
 
 
 def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], None] = print) -> dict:
@@ -48,23 +76,61 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
     probe_count = 0
     opts = _probe_opts(cfg)
 
+    consent: str | None = None
     with browser.session(cfg) as (page, runtime):
+        errors.extend(states.run_setup(page, cfg))
+        if cfg.states.dismiss_consent:
+            try:
+                browser.load(page, cfg.base_url, "/", 1280, 900, cfg.settle_ms)
+                consent = states.dismiss_consent(page, cfg)
+            except Exception:  # noqa: BLE001 - the routes below report what cannot be loaded
+                pass
         discovery = routes.discover(cfg, page, only_routes)
         errors.extend(discovery.errors)
         log(f"routes: {', '.join(r.path for r in discovery.routes)}")
         if discovery.skipped_dynamic:
             log(f"skipped dynamic routes (add [routes.samples]): {', '.join(discovery.skipped_dynamic)}")
+        if consent:
+            log(f"consent banner closed with \"{consent}\"")
 
-        for route in discovery.routes:
+        # A targeted rerun audits exactly what was asked for, so verify can rely on its coverage.
+        dedupe = cfg.routes.dedupe and not only_routes
+        missing = _missing_fingerprint(page, cfg) if dedupe else None
+        seen_pages: dict[str, str] = {}
+        seen_paths: dict[str, str] = {}
+
+        measured = 0
+        for position, route in enumerate(discovery.routes):
             path = route.path
+            # max_routes bounds what is measured; CANDIDATE_FACTOR bounds how many pages are
+            # opened to find that many, so a long list of redirects cannot run forever.
+            if not only_routes and (measured >= cfg.routes.max_routes
+                                    or position >= cfg.routes.max_routes * CANDIDATE_FACTOR):
+                discovery.truncated = [r.path for r in discovery.routes[position:]]
+                log(f"max_routes reached, not audited: {', '.join(discovery.truncated)}")
+                break
             runtime.clear()
             try:
-                browser.load(page, cfg.base_url, path, 1280, 900, cfg.settle_ms)
+                response = browser.load(page, cfg.base_url, path, 1280, 900, cfg.settle_ms)
             except Exception as exc:  # noqa: BLE001 - keep auditing the other routes
                 errors.append(f"{path}: could not load ({exc.__class__.__name__}: {str(exc)[:120]})")
                 route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": False})
                 continue
-            route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": True})
+            if cfg.states.dismiss_consent and consent is None:
+                # The banner may only exist on some pages; once it is gone, start this route clean.
+                consent = states.dismiss_consent(page, cfg)
+                if consent:
+                    runtime.clear()
+                    response = browser.load(page, cfg.base_url, path, 1280, 900, cfg.settle_ms)
+            skip = _skip_reason(page, response, path, missing, seen_pages, seen_paths) if dedupe else None
+            if skip:
+                route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": True,
+                                      "status": f"skipped: {skip}"})
+                log(f"{path}: skipped ({skip})")
+                continue
+            route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": True,
+                                  "status": "audited"})
+            measured += 1
             breakpoints = page.evaluate("() => window.__uiAudit.breakpoints()")
             all_breakpoints.update(breakpoints)
             baseline_errors = set(runtime.console_errors) | set(runtime.failed_resources)
@@ -179,6 +245,8 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
         "config": cfg.to_dict(),
         "routes": route_records,
         "skipped_dynamic_routes": discovery.skipped_dynamic,
+        "truncated_routes": discovery.truncated,
+        "consent_dismissed": consent,
         "states": state_records,
         "breakpoints": sorted(all_breakpoints),
         "coverage": coverage,
@@ -188,6 +256,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
         "stats": {
             "probes": probe_count,
             "captures": len(captures),
+            "screenshot_bytes": sum(f.stat().st_size for f in shots_dir.glob("*.png")),
             "issues": report_mod.summary_counts(issues),
             "seconds": round(time.monotonic() - started, 1),
         },
