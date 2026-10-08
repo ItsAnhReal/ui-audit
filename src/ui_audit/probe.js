@@ -225,12 +225,22 @@
     };
   }
 
-  function isPinned(el) {
+  // The nearest fixed or sticky ancestor (or the element itself), or null for page content.
+  function pinnedLayer(el) {
     for (let node = el; node && node !== document.documentElement; node = node.parentElement) {
       const position = getComputedStyle(node).position;
-      if (position === "fixed" || position === "sticky") return true;
+      if (position === "fixed" || position === "sticky") return { node, sticky: position === "sticky" };
     }
-    return false;
+    return null;
+  }
+
+  // A fixed or sticky bar passes over scrolling content by design, and a sticky row or
+  // header slides under a fixed bar the same way. Two fixed layers stay where they are,
+  // so when they overlap they always do.
+  function passesOver(a, b) {
+    if (!a && !b) return false;
+    if (!a || !b) return true;
+    return a.node !== b.node && (a.sticky || b.sticky);
   }
 
   function isAdornment(field, fieldRect, other, otherRect) {
@@ -379,14 +389,13 @@
     const controls = visible.filter((el) => el.matches(INTERACTIVE)).slice(0, 400);
     // Overlap is judged on what is visible: a list scrolled under a footer does not cover it.
     const boxes = controls.map(visibleRect);
-    const pinned = controls.map(isPinned);
+    const pinned = controls.map(pinnedLayer);
     const lines = controls.map(lineBoxes);
     for (let i = 0; i < controls.length; i++) {
       for (let j = i + 1; j < controls.length; j++) {
         const a = controls[i], b = controls[j];
         if (a.contains(b) || b.contains(a)) continue;
-        // A fixed or sticky bar passes over scrolling content by design.
-        if (pinned[i] !== pinned[j]) continue;
+        if (passesOver(pinned[i], pinned[j])) continue;
         let ra = boxes[i], rb = boxes[j];
         // A button placed inside a text field (show password, clear search) is an adornment.
         if (isAdornment(a, ra, b, rb) || isAdornment(b, rb, a, ra)) continue;
@@ -430,7 +439,7 @@
       const me = targets[k];
       for (let m = 0; m < controls.length; m++) {
         if (m === k || controls[k].contains(controls[m]) || controls[m].contains(controls[k])) continue;
-        if (pinned[m] !== pinned[k]) continue;  // a floating panel is not a neighbour of the page under it
+        if (passesOver(pinned[m], pinned[k])) continue;  // a floating panel is not a neighbour of the page under it
         const other = targets[m];
         if (!other.r.width || !other.r.height) continue;
         if (other.small) {

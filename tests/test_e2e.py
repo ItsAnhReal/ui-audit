@@ -98,7 +98,9 @@ body { margin: 0; font: 16px/1.5 sans-serif; }
 main a { display: block; width: 200px; height: 44px; margin: 720px 24px 0; }
 .bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 16px; background: #eee; }
 .bar button { width: 100%; height: 48px; }
+.stick { position: sticky; top: 790px; margin-top: 790px; background: #ddd; }
 </style></head><body>
+<section><div class="stick"><button>Sort by price</button></div><div style="height: 1400px"></div></section>
 <div class="field"><input aria-label="Password" type="password"><button aria-label="Show password">o</button></div>
 <p class="legal">By continuing you accept the <a href="/pricing.html">terms of service agreement</a> and the
 <a href="/dashboard.html">privacy and data policy</a>.</p>
