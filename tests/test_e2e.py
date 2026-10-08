@@ -280,3 +280,18 @@ def test_key_width_mode_probes_a_range_without_presets(demo_site, tmp_path):
     report = audit.run(cfg, log=lambda _: None)
     opened = [s for s in report["states"] if s["id"] != "default"]
     assert opened and all(s["status"] == "audited" for s in opened)
+
+
+def test_page_overflow_names_the_text_or_hidden_box_behind_it(demo_site, tmp_path):
+    url, site = demo_site
+    page = '<!doctype html><html lang="de"><head><meta charset="utf-8"><title>t</title><style>body {{ margin: 0; }}</style></head><body>{}</body></html>'
+    (site / "long-word.html").write_text(page.format('<h1 style="font-size: 32px">Kategorieaufschlüsselungsübersicht</h1>'))
+    (site / "tooltip.html").write_text(page.format(
+        '<p>Chart</p><div style="position: absolute; left: 500px; top: 0; width: 120px; visibility: hidden">Tooltip</div>'))
+    cfg = config(url, site, tmp_path / "run", routes={"include": ["/long-word.html", "/tooltip.html"]},
+                 states={"auto": False}, viewports={"widths": [320]})
+    report = audit.run(cfg, log=lambda _: None)
+    [word] = found(report, "horizontal-overflow", "/long-word.html")
+    assert word["selector"].endswith("h1") and "Kategorieaufschlüsselungsübersicht" in word["message"]
+    [hidden] = found(report, "horizontal-overflow", "/tooltip.html")
+    assert hidden["selector"].endswith("div") and "invisible element" in hidden["message"]

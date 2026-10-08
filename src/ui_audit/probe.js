@@ -81,6 +81,22 @@
     return parts.join(" > ");
   }
 
+  // The first visible text that runs past the viewport's right edge with nothing clipping it.
+  function overflowingText(vw) {
+    if (!document.body) return null;
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const range = document.createRange();
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const parent = node.parentElement;
+      if (!node.nodeValue.trim() || !parent || !isVisible(parent) || clippingAncestor(parent)) continue;
+      if (getComputedStyle(parent).position === "fixed") continue;
+      range.selectNodeContents(node);
+      const right = range.getBoundingClientRect().right + window.scrollX;
+      if (right > vw + 1) return { el: parent, text: node.nodeValue.trim().slice(0, 60), right: Math.round(right) };
+    }
+    return null;
+  }
+
   function clippingAncestor(el) {
     for (let node = el.parentElement; node && node !== document.body && node !== document.documentElement; node = node.parentElement) {
       const ox = getComputedStyle(node).overflowX;
@@ -335,8 +351,20 @@
             `Extends to ${right}px in a ${vw}px viewport (page scrolls sideways by ${scrollWidth - vw}px).`));
         }
       } else {
-        push(makeIssue("horizontal-overflow", "P1", document.documentElement,
-          `Page is ${scrollWidth}px wide in a ${vw}px viewport.`));
+        // No box sticks out, so the page is widened by text that overflows its box (a long
+        // word that cannot wrap) or by a box nobody sees (a hidden tooltip left in place).
+        const culprit = overflowingText(vw) || all.find((el) => !isVisible(el) && el.getClientRects().length
+          && beyondRight(el) && getComputedStyle(el).position !== "fixed" && !clippingAncestor(el));
+        if (culprit && culprit.el) {
+          push(makeIssue("horizontal-overflow", "P1", culprit.el,
+            `Text "${culprit.text}" runs to ${culprit.right}px in a ${vw}px viewport (page scrolls sideways by ${scrollWidth - vw}px).`));
+        } else if (culprit) {
+          push(makeIssue("horizontal-overflow", "P1", culprit,
+            `An invisible element extends to ${Math.round(culprit.getBoundingClientRect().right + window.scrollX)}px in a ${vw}px viewport (page scrolls sideways by ${scrollWidth - vw}px).`));
+        } else {
+          push(makeIssue("horizontal-overflow", "P1", document.documentElement,
+            `Page is ${scrollWidth}px wide in a ${vw}px viewport.`));
+        }
       }
     }
 
