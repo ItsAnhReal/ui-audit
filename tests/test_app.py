@@ -86,7 +86,8 @@ def test_app_runs_an_audit_and_accepts_a_finding(demo_site, tmp_path):
             first = page.locator(".item").first
             first.wait_for()
             assert "Text clipped by its box" in page.locator(".detail h2").inner_text()
-            assert page.locator(".stage img").evaluate("img => img.naturalWidth") > 0  # the screenshot loads
+            page.locator(".stage-wrap:not(.loading-img) .stage img").wait_for()  # loaded, not replaced by an error
+            assert page.locator(".stage img").evaluate("img => img.naturalWidth") > 0
             page.get_by_role("button", name="Accept", exact=True).click()
             page.locator(".accept-form textarea").fill("intentional teaser")
             page.locator(".accept-form button[type=submit]").click()
