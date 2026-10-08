@@ -193,3 +193,40 @@ def test_saved_session_is_reused_by_the_audit(demo_site, tmp_path):
     assert saved.stat().st_mode & 0o777 == 0o600
     cfg.storage_state = str(saved)
     assert audit.run(cfg, log=lambda _: None)["coverage"]["/pricing.html|default"] == [390]
+
+
+def test_same_text_in_different_markup_is_audited_as_its_own_page(demo_site, tmp_path):
+    url, site = demo_site
+    page = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Save</title></head><body><main>{}</main></body></html>'
+    (site / "save-button.html").write_text(page.format("<button>Save</button>"))
+    (site / "save-link.html").write_text(page.format('<a href="#top">Save</a>'))
+    cfg = config(url, site, tmp_path / "run", routes={"include": ["/save-button.html", "/save-link.html"]},
+                 states={"auto": False}, viewports={"widths": [390]})
+    report = audit.run(cfg, log=lambda _: None)
+    assert [r["status"] for r in report["routes"]] == ["audited", "audited"]
+
+
+PROMO = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Promo</title><style>
+body { margin: 0; font: 16px/1.5 sans-serif; }
+#promo { width: 600px; padding: 8px; background: #fe0; }
+</style></head><body>
+<div id="promo">Half price this week <button id="close-promo" aria-label="Close">x</button></div>
+<main><p>Our plans.</p></main>
+<script>document.getElementById("close-promo").onclick = () => document.getElementById("promo").remove();</script>
+</body></html>"""
+
+
+def test_setup_actions_are_replayed_on_every_page(demo_site, tmp_path):
+    url, site = demo_site
+    # The promo is not remembered, so closing it once on "/" would leave it open everywhere else.
+    (site / "promo.html").write_text(PROMO)
+    cfg = config(url, site, tmp_path / "run", routes={"include": ["/promo.html"]}, states={"auto": False},
+                 viewports={"widths": [390]}, setup=[{"click": "#close-promo"}])
+    report = audit.run(cfg, log=lambda _: None)
+    assert not found(report, "horizontal-overflow", "/promo.html")
+    # "/" has no promo: the failed first run is reported, the skipped replays are not.
+    assert report["errors"] == ["setup: action 1 could not run ({'click': '#close-promo'})"]
+
+    unset = audit.run(config(url, site, tmp_path / "unset", routes={"include": ["/promo.html"]},
+                             states={"auto": False}, viewports={"widths": [390]}), log=lambda _: None)
+    assert found(unset, "horizontal-overflow", "/promo.html")
