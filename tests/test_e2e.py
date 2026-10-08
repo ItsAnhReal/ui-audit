@@ -211,3 +211,24 @@ def test_pages_without_real_content_are_called_out(demo_site, tmp_path):
     assert content == {"/pricing.html": "ok", "/gone.html": "error-like", "/thin.html": "thin",
                        "/busy.html": "loading", "/busy-too.html": "loading"}
     assert report["groups"] == [] or all(g["issue_ids"] for g in report["groups"])
+
+
+def test_key_width_mode_probes_states_less_and_still_finds_their_defects(demo_site, tmp_path):
+    url, site = demo_site
+    only_home = {"routes": {"include": ["/"]}}
+    full = audit.run(config(url, site, tmp_path / "full", **only_home), log=lambda _: None)
+    fast = audit.run(config(url, site, tmp_path / "fast", states={"sweep": "key"}, **only_home), log=lambda _: None)
+    assert len(fast["coverage"]["/|default"]) == len(full["coverage"]["/|default"])
+    assert len(fast["coverage"]["/|expand-menu"]) < len(full["coverage"]["/|expand-menu"])
+    assert found(fast, "horizontal-overflow", "/", "expand-menu")
+    assert fast["stats"]["probes"] < full["stats"]["probes"]
+
+
+def test_locale_sets_the_browser_language(demo_site, tmp_path):
+    from ui_audit import browser
+
+    url, site = demo_site
+    cfg = config(url, site, tmp_path / "run", locale="de")
+    with browser.session(cfg) as (page, _):
+        browser.load(page, url, "/", 1280, 900, 0)
+        assert page.evaluate("navigator.language") == "de"

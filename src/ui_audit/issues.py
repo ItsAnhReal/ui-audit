@@ -9,7 +9,9 @@ compares between runs.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
+from pathlib import Path
 
 SEVERITY_ORDER = {"P1": 1, "P2": 2, "P3": 3}
 
@@ -133,6 +135,28 @@ def assign_groups(issues: list[dict]) -> list[dict]:
         if widths:
             group["widths"] = [min(widths + group["widths"]), max(widths + group["widths"])]
     return sorted(groups.values(), key=lambda g: (SEVERITY_ORDER.get(g["severity"], 9), -len(g["routes"]), -g["count"]))
+
+
+def load_accepted(path: Path) -> dict[str, dict]:
+    """Findings someone looked at and accepted as intentional, by signature."""
+    try:
+        entries = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {e["signature"]: e for e in entries if isinstance(e, dict) and e.get("signature")}
+
+
+def mark_accepted(issues: list[dict], accepted: dict[str, dict]) -> int:
+    """Flag accepted issues; they stay in the report but out of the counts."""
+    count = 0
+    for issue in issues:
+        entry = accepted.get(issue["signature"])
+        if entry:
+            issue["accepted"] = {"reason": entry.get("reason", ""), "date": entry.get("date", "")}
+            count += 1
+        else:
+            issue.pop("accepted", None)
+    return count
 
 
 def sweep_signature(probe_result: dict) -> frozenset[str]:

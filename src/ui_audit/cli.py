@@ -40,6 +40,10 @@ def _load_config(args):
         cfg.browser_path = args.browser_path
     if getattr(args, "storage_state", None):
         cfg.storage_state = args.storage_state
+    if getattr(args, "locale", None):
+        cfg.locale = args.locale
+    if getattr(args, "fast", False):
+        cfg.states.sweep = "key"
     return cfg, path
 
 
@@ -108,6 +112,42 @@ def _open_viewer(path: Path) -> None:
     webbrowser.open(path.resolve().as_uri())
 
 
+def cmd_accept(args) -> int:
+    from datetime import date
+
+    from . import report as report_mod
+    from .issues import mark_accepted
+
+    out_dir = Path(args.report_dir)
+    report = report_mod.read_json(out_dir)
+    wanted = set(args.ids)
+    for group in report.get("groups", []):
+        if group["id"] in wanted:
+            wanted |= set(group["issue_ids"])
+    chosen = [i for i in report["issues"] if i["id"] in wanted]
+    if not chosen:
+        print(f"no issue or group in {out_dir} has the id(s): {', '.join(args.ids)}", file=sys.stderr)
+        return 2
+    config = report.get("config") or {}
+    path = Path(report["project_root"]) / config.get("accepted_file", "ui-audit.accepted.json")
+    try:
+        entries = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        entries = []
+    known = {e.get("signature") for e in entries}
+    today = date.today().isoformat()
+    added = [{"signature": i["signature"], "check": i["check"], "route": i["route"], "reason": args.reason, "date": today}
+             for i in chosen if i["signature"] not in known]
+    path.write_text(json.dumps(entries + added, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    # The open report reflects the decision right away; later audits read the file.
+    mark_accepted(report["issues"], {e["signature"]: e for e in entries + added})
+    report["stats"]["issues"] = report_mod.summary_counts(report["issues"])
+    report_mod.write_json(report, out_dir)
+    report_mod.write_html(report, out_dir)
+    print(f"accepted {len(added)} finding(s) in {path}" + (f" ({len(chosen) - len(added)} were already accepted)" if len(added) < len(chosen) else ""))
+    return 0
+
+
 def cmd_login(args) -> int:
     from . import browser
 
@@ -144,6 +184,38 @@ def cmd_report(args) -> int:
     return 0
 
 
+UI_SOURCE_EXTS = {".tsx", ".jsx", ".ts", ".js", ".vue", ".svelte", ".astro", ".css", ".scss", ".sass", ".less", ".html"}
+
+
+def _git_changed(project_root: str, ref: str) -> list[str]:
+    """Files that differ from `ref`, plus new untracked ones, relative to project_root."""
+    import subprocess
+
+    def lines(*command: str) -> list[str]:
+        done = subprocess.run(["git", "-C", project_root, *command], capture_output=True, text=True, check=True)
+        return [line for line in done.stdout.splitlines() if line]
+
+    return sorted(set(lines("diff", "--name-only", "--relative", ref)) | set(lines("ls-files", "--others", "--exclude-standard")))
+
+
+def routes_for_changes(baseline: dict, changed: list[str]) -> tuple[list[str], str]:
+    """Which routes of a previous full audit a set of changed files can affect, and why."""
+    audited = [r for r in baseline["routes"] if r.get("status", "audited") == "audited" and r.get("loaded", True)]
+    every = [r["path"] for r in audited]
+    touched = [f for f in changed if Path(f).suffix in UI_SOURCE_EXTS]
+    if not touched:
+        return [], "no UI source file changed"
+    known = set().union(*(set(r.get("sources") or []) for r in audited)) if audited else set()
+    if not known:
+        return every, "the baseline has no component sources (not a dev build of React, Vue or Svelte), so every route is audited"
+    unmapped = [f for f in touched if f not in known]
+    if unmapped:
+        # A stylesheet, a helper or a component no audited page rendered: its reach is unknown.
+        return every, f"{unmapped[0]}{' and others' if len(unmapped) > 1 else ''} could affect any page, so every route is audited"
+    hit = [r["path"] for r in audited if set(r.get("sources") or []) & set(touched)]
+    return hit, f"{len(hit)} of {len(every)} routes render a changed file"
+
+
 def cmd_audit(args) -> int:
     from . import report as report_mod
     from .audit import run
@@ -164,7 +236,25 @@ def cmd_audit(args) -> int:
     if args.sweep_step:
         cfg.viewports.sweep_step = args.sweep_step
     log = (lambda _msg: None) if args.quiet else (lambda msg: print(msg, file=sys.stderr))
-    result = run(cfg, only_routes=args.route or None, log=log)
+    only_routes = args.route or None
+    if args.changed_since:
+        baseline_dir = Path(args.baseline or cfg.output)
+        if not (baseline_dir / report_mod.REPORT_JSON).is_file():
+            print(f"--changed-since needs a previous full audit to map files to routes; none in {baseline_dir} "
+                  "(run a full audit first, or pass --baseline)", file=sys.stderr)
+            return 2
+        try:
+            changed = _git_changed(cfg.project_root, args.changed_since)
+        except Exception as exc:  # noqa: BLE001 - not a git checkout, unknown ref, git missing
+            print(f"could not list changes since {args.changed_since}: {str(exc).splitlines()[0]}", file=sys.stderr)
+            return 2
+        only_routes, why = routes_for_changes(report_mod.read_json(baseline_dir), changed)
+        print(f"changed since {args.changed_since}: {why}")
+        if not only_routes:
+            return 0
+        if Path(cfg.output).resolve() == baseline_dir.resolve():
+            cfg.output = str(baseline_dir.with_name(baseline_dir.name + "-changed"))  # keep the full report
+    result = run(cfg, only_routes=only_routes, log=log)
 
     counts = result["stats"]["issues"]
     out = Path(cfg.output)
@@ -287,7 +377,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--quiet", action="store_true")
     p.add_argument("--open", action="store_true", help="open the report viewer in the browser when done")
     p.add_argument("--storage-state", help="signed-in session saved by `ui-audit login`")
+    p.add_argument("--changed-since", metavar="REF",
+                   help="audit only routes that render a file changed since this git ref (needs a previous full audit)")
+    p.add_argument("--baseline", help="the full audit --changed-since maps files with (default: the output directory)")
+    p.add_argument("--locale", help='browser language for this run, e.g. "de"')
+    p.add_argument("--fast", action="store_true",
+                   help="probe opened menus, tabs and dialogs only at key widths (same as [states] sweep = \"key\")")
     p.set_defaults(func=cmd_audit)
+
+    p = sub.add_parser("accept", help="mark findings as intentional so later audits stop counting them")
+    p.add_argument("report_dir")
+    p.add_argument("ids", nargs="+", help="issue ids or group ids from the report")
+    p.add_argument("--reason", required=True, help="why this is fine; kept next to the finding")
+    p.set_defaults(func=cmd_accept)
 
     p = sub.add_parser("login", help="sign in once in a browser window and save the session for audits")
     p.add_argument("--config", help="path to ui-audit.toml (default: search upwards)")

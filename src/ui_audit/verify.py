@@ -27,8 +27,10 @@ def _in_scope(issue: dict, coverage: dict[str, set[int]]) -> bool:
 
 def compare(baseline: dict, current: dict) -> dict:
     coverage = _coverage(current)
-    base = {i["signature"]: i for i in baseline["issues"]}
-    now = {i["signature"]: i for i in current["issues"]}
+    # A finding accepted as intentional is neither introduced nor still to fix.
+    accepted = {i["signature"] for i in current["issues"] if i.get("accepted")}
+    base = {i["signature"]: i for i in baseline["issues"] if i["signature"] not in accepted}
+    now = {i["signature"]: i for i in current["issues"] if i["signature"] not in accepted}
 
     # An agent finding can only be called fixed if the agent looked again.
     reviewed = {(i["route"], i["state"]) for i in current["issues"] if i.get("origin") == "agent"}

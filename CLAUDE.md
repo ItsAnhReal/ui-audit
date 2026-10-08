@@ -22,7 +22,7 @@ If Playwright's pinned Chromium is missing, `browser.launch()` falls back to any
 
 | Module | Responsibility |
 |---|---|
-| `cli.py` | argparse commands: `init`, `doctor`, `audit`, `login`, `report`, `merge-findings`, `verify`, `install-skill` |
+| `cli.py` | argparse commands: `init`, `doctor`, `audit`, `login`, `accept`, `report`, `merge-findings`, `verify`, `install-skill` |
 | `config.py` | dataclass config, `ui-audit.toml` loading (unknown keys are errors), template |
 | `audit.py` | the pipeline: routes → states → sweep → captures → source hints → reports |
 | `probe.js` | injected as an init script; all in-page measurement, state candidates, annotations |
@@ -45,6 +45,7 @@ If Playwright's pinned Chromium is missing, `browser.launch()` falls back to any
 - Automatic state discovery must stay conservative: no forms, no navigation, no destructive-sounding controls.
 - The sweep stays bounded: `max_refinements` and `max_captures` caps are part of the product, not tuning knobs to remove.
 - Every planted defect in `demo/` has an end-to-end assertion; add one when you add a check.
+- A check that reported something that is not a defect gets the smallest page reproducing it in `tests/cases/` before the check changes; the first line of each case states what an audit must report.
 
 ## Conventions
 

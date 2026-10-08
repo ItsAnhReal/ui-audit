@@ -29,6 +29,8 @@ def read_json(path: Path) -> dict:
 def summary_counts(issues: list[dict]) -> dict[str, int]:
     counts = {"P1": 0, "P2": 0, "P3": 0}
     for issue in issues:
+        if issue.get("accepted"):
+            continue
         counts[issue["severity"]] = counts.get(issue["severity"], 0) + 1
     return counts
 
@@ -39,8 +41,8 @@ def audited_routes(report: dict) -> list[dict]:
 
 
 # Fields the viewer reads. Rects and DOM hints stay in report.json only.
-_ISSUE_FIELDS = ("id", "group", "check", "severity", "origin", "route", "state", "selector", "message", "widths", "evidence")
-_REPORT_FIELDS = ("version", "created", "base_url", "project_root", "routes", "skipped_dynamic_routes",
+_ISSUE_FIELDS = ("id", "group", "accepted", "check", "severity", "origin", "route", "state", "selector", "message", "widths", "evidence")
+_REPORT_FIELDS = ("version", "created", "base_url", "project_root", "output_dir", "locale", "routes", "skipped_dynamic_routes",
                   "truncated_routes", "consent_dismissed", "states", "breakpoints", "captures", "errors", "stats")
 
 
@@ -48,8 +50,14 @@ def _viewer_data(report: dict) -> dict:
     data = {key: report[key] for key in _REPORT_FIELDS if key in report}
     assign_groups(report["issues"])  # reports written before grouping existed get it here
     data["config"] = {"viewports": (report.get("config") or {}).get("viewports", {})}
+    # Boxes for the screenshot viewer: only at widths that have a screenshot.
+    shot_widths: dict[tuple[str, str], set[str]] = {}
+    for capture in report.get("captures", []):
+        shot_widths.setdefault((capture["route"], capture["state"]), set()).add(str(capture["width"]))
     data["issues"] = [
         {**{key: issue[key] for key in _ISSUE_FIELDS if key in issue},
+         "rects": {w: r for w, r in (issue.get("rects") or {}).items()
+                   if w in shot_widths.get((issue["route"], issue["state"]), ())},
          "source_candidates": [{"file": c["file"], "line": c.get("line")} for c in issue.get("source_candidates", [])[:2]]}
         for issue in report["issues"]
     ]

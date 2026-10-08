@@ -533,6 +533,27 @@
     return `${expanded}|${shown}`;
   }
 
+  // Source files of the components on the page, as far as a dev build reveals them
+  // (React's _debugSource, Vue's __file, Svelte's __svelte_meta). Empty in production builds.
+  function sourceFiles() {
+    const files = new Set();
+    const seen = new WeakSet();
+    const all = document.body ? document.body.querySelectorAll("*") : [];
+    for (let n = 0; n < all.length && n < 5000; n++) {
+      const node = all[n];
+      const key = Object.keys(node).find((k) => k.startsWith("__reactFiber$"));
+      for (let fiber = key && node[key]; fiber && !seen.has(fiber); fiber = fiber.return) {
+        seen.add(fiber);
+        if (fiber._debugSource && fiber._debugSource.fileName) files.add(fiber._debugSource.fileName);
+      }
+      const vue = node.__vueParentComponent;
+      if (vue && vue.type && vue.type.__file) files.add(vue.type.__file);
+      const svelte = node.__svelte_meta;
+      if (svelte && svelte.loc && svelte.loc.file) files.add(svelte.loc.file);
+    }
+    return Array.from(files);
+  }
+
   // Whether the page shows what it is for. A skeleton, an error screen or an almost
   // empty page measures clean and says nothing about the real page.
   function contentState() {
@@ -602,6 +623,6 @@
   }
 
   window.__uiAudit = {
-    probe, breakpoints, stateCandidates, consentDecline, contentState, domFingerprint, pageFingerprint, isTriggerVisible, annotate, clearAnnotations,
+    probe, breakpoints, stateCandidates, consentDecline, contentState, sourceFiles, domFingerprint, pageFingerprint, isTriggerVisible, annotate, clearAnnotations,
   };
 })();

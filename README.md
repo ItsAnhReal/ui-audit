@@ -89,6 +89,26 @@ actions = [{ click = "#cart" }, { wait_for = ".cart-drawer" }]
 
 Actions: `click`, `hover`, `fill` + `value`, `press`, `wait`, `wait_for`. For logged-in pages, save a Playwright storage state and set `storage_state`.
 
+## Faster runs
+
+A full audit sweeps every route and every opened menu, tab and dialog across the whole width range. Three ways to spend less:
+
+- `--fast` (or `[states] sweep = "key"`) still sweeps each route's initial page fully, but probes opened states only at the presets, the breakpoints and the widths where the initial page changed.
+- `--changed-since <git ref>` audits only the routes that render a file changed since that ref. It reads which components each route rendered from a previous full report (`--baseline`, default: the output directory), which a dev build of React, Vue or Svelte reveals. A changed stylesheet, helper or component that no audited page rendered could affect anything, so then every route is audited; the command says which case applied.
+- `--no-annotate` saves each screenshot once instead of twice. The viewer draws the boxes itself; only the agent's review packet loses its annotated images.
+
+## Languages
+
+`--locale de` (or `locale = "de"`) sets the browser language. Apps that follow it render in that language, where longer labels overflow first. Run once per language into separate output directories.
+
+## Accepting a finding
+
+Some findings are intentional. `ui-audit accept <report folder> <issue or group id> --reason "…"` records them in `ui-audit.accepted.json` in the project root (commit it). Accepted findings stay in the report, flagged with the reason, but out of the counts, `--fail-on` and `verify`. The viewer hides them behind an "Accepted" filter and has a button on every finding that copies the command.
+
+## In CI
+
+[`examples/github-workflow.yml`](examples/github-workflow.yml) audits the routes a pull request touches and comments the comparison with the base branch. It is a starting point: starting your app and keeping a baseline report are yours to adapt.
+
 ## Pages behind a login
 
 ```bash
