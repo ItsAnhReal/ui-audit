@@ -32,7 +32,7 @@ def _probe_opts(cfg: Config) -> dict:
 
 
 def _skip_reason(page, response, path: str, missing: str | None, seen_pages: dict[str, str],
-                 seen_paths: dict[str, str]) -> str | None:
+                 seen_paths: dict[str, str], loading: bool = False) -> str | None:
     """Why a freshly loaded route adds nothing to the audit, or None if it should be audited."""
     fingerprint = page.evaluate("() => window.__uiAudit.pageFingerprint()")
     landed = routes.normalize(page.url)
@@ -40,8 +40,12 @@ def _skip_reason(page, response, path: str, missing: str | None, seen_pages: dic
         return "not found"
     if landed != path and landed in seen_paths:
         return f"redirects to {seen_paths[landed]}"
-    # A blank page (still loading, or empty by design) identifies nothing.
-    if not fingerprint.startswith("0:") and fingerprint in seen_pages:
+    # A blank page or a loading skeleton identifies nothing: two different pages look alike.
+    if loading or fingerprint.startswith("0:"):
+        seen_paths.setdefault(landed, path)
+        seen_paths.setdefault(path, path)
+        return None
+    if fingerprint in seen_pages:
         return f"same page as {seen_pages[fingerprint]}"
     seen_pages.setdefault(fingerprint, path)
     seen_paths.setdefault(landed, path)
@@ -123,14 +127,18 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                 if consent:
                     runtime.clear()
                     response = browser.load(page, cfg.base_url, path, 1280, 900, cfg.settle_ms)
-            skip = _skip_reason(page, response, path, missing, seen_pages, seen_paths) if dedupe else None
+            content = page.evaluate("() => window.__uiAudit.contentState()")
+            skip = (_skip_reason(page, response, path, missing, seen_pages, seen_paths, content["state"] == "loading")
+                    if dedupe else None)
             if skip:
                 route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": True,
                                       "status": f"skipped: {skip}"})
                 log(f"{path}: skipped ({skip})")
                 continue
             route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": True,
-                                  "status": "audited"})
+                                  "status": "audited", "content": content})
+            if content["state"] != "ok":
+                log(f"{path}: may not show its real content ({content['state']}: {content['detail']})")
             measured += 1
             breakpoints = page.evaluate("() => window.__uiAudit.breakpoints()")
             all_breakpoints.update(breakpoints)

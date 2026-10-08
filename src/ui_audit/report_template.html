@@ -61,6 +61,7 @@ button, select, input { font: inherit; color: inherit; }
 .filters input { flex: 1 1 160px; }
 .filters .count { margin-left: auto; color: var(--soft); font-size: 13px; }
 
+#issues { padding-top: 14px; }
 .route { margin: 30px 0 10px; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .route h2 { margin: 0; font: 600 17px/1.3 var(--mono); word-break: break-all; }
 .route span { color: var(--soft); font-size: 13px; }
@@ -87,6 +88,15 @@ button, select, input { font: inherit; color: inherit; }
 .shot { position: relative; width: 104px; height: 132px; padding: 0; border: 1px solid var(--rule); border-radius: 4px; overflow: hidden; background: var(--paper); cursor: zoom-in; }
 .shot img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; }
 .shot b { position: absolute; left: 0; bottom: 0; padding: 1px 5px; background: var(--ink); color: var(--paper); font: 400 11px/1.4 var(--mono); border-top-right-radius: 4px; }
+.cause > summary { cursor: pointer; margin: 10px 0 0; font-size: 13px; font-weight: 600; color: var(--steel); }
+.cause[open] > summary { margin-bottom: 10px; }
+.cause .issue { background: var(--paper); }
+.places { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
+.places li { padding: 1px 8px; border: 1px solid var(--rule); border-radius: 999px; font: 12px/1.6 var(--mono); color: var(--soft); word-break: break-all; }
+.notice { margin: 18px 0 0; padding: 12px 16px; border: 1px solid var(--p2); border-left-width: 4px; border-radius: 6px; background: var(--sheet); font-size: 14px; }
+.notice ul { margin: 6px 0 0; padding-left: 18px; color: var(--soft); font-size: 13px; }
+.notice code { font: 12px var(--mono); color: var(--ink); }
+.sep { width: 1px; align-self: stretch; background: var(--rule); margin: 0 4px; }
 .empty { margin: 30px 0; padding: 28px; text-align: center; background: var(--sheet); border: 1px dashed var(--rule); border-radius: 6px; color: var(--soft); }
 .empty button { margin-left: 6px; }
 
@@ -125,6 +135,7 @@ a.btn { color: inherit; text-decoration: none; }
     <ul class="tally" id="tally"></ul>
   </header>
   <p class="facts" id="facts"></p>
+  <div class="notice" id="notice" hidden></div>
 
   <section class="map" aria-labelledby="map-title">
     <h2 id="map-title">Where the findings sit</h2>
@@ -134,6 +145,9 @@ a.btn { color: inherit; text-decoration: none; }
   </section>
 
   <div class="filters" id="filters">
+    <button class="chip" data-view="cause" aria-pressed="true">By cause</button>
+    <button class="chip" data-view="route" aria-pressed="false">By route</button>
+    <span class="sep" aria-hidden="true"></span>
     <button class="chip" data-sev="P1" aria-pressed="false">P1</button>
     <button class="chip" data-sev="P2" aria-pressed="false">P2</button>
     <button class="chip" data-sev="P3" aria-pressed="false">P3</button>
@@ -189,7 +203,7 @@ a.btn { color: inherit; text-decoration: none; }
   const hi = (i) => Math.max(...(i.widths && i.widths.length ? i.widths : [LO]));
   const widthText = (i) => !i.widths || !i.widths.length ? "no width" : lo(i) === hi(i) ? `${lo(i)}px` : `${lo(i)}–${hi(i)}px`;
   const shotWidth = (file) => { const m = /__(\d+)(__annotated)?\.png$/.exec(file); return m ? `${m[1]}px` : ""; };
-  const state = { sev: new Set(), route: "", check: "", text: "", width: null };
+  const state = { view: "cause", sev: new Set(), route: "", check: "", text: "", width: null };
 
   // Header
   const host = (R.base_url || "").replace(/^https?:\/\//, "");
@@ -278,9 +292,9 @@ a.btn { color: inherit; text-decoration: none; }
     }
     return best && (best.annotated || best.file);
   }
-  function card(i) {
+  function card(i, withRoute) {
     const body = el("div", {});
-    const title = el("h3", {}, i.check, el("small", { text: widthText(i) }));
+    const title = el("h3", {}, withRoute ? i.route : i.check, el("small", { text: widthText(i) }));
     if (i.origin === "agent") title.append(el("span", { class: "tag", text: "agent review" }));
     if (i.state && i.state !== "default") title.append(el("span", { class: "tag", text: `state: ${i.state}` }));
     body.append(title, el("p", { class: "where", text: i.message }));
@@ -315,16 +329,52 @@ a.btn { color: inherit; text-decoration: none; }
     }
     return el("article", { class: `issue ${i.severity}` }, el("div", { class: "sev", text: i.severity }), body);
   }
+  const worst = (group) => Math.min(...group.map((i) => ORDER[i.severity] ?? 9));
+  const tally = (group) => ["P1", "P2", "P3"].map((s) => [s, group.filter((i) => i.severity === s).length]).filter(([, n]) => n).map(([s, n]) => `${n} ${s}`).join(" · ");
+  function causeOfOne(i) {
+    const node = card(i, false);
+    node.querySelector("h3").after(el("ul", { class: "places" }, el("li", { text: i.route })));
+    return node;
+  }
+  function cause(group) {
+    const first = group[0];
+    const routes = [...new Set(group.map((i) => i.route))];
+    const all = { widths: [...new Set(group.flatMap((i) => i.widths || []))].sort((a, b) => a - b) };
+    const body = el("div", {});
+    body.append(
+      el("h3", {}, first.check, el("small", { text: `${group.length} findings on ${routes.length} route${routes.length === 1 ? "" : "s"} · ${widthText(all)}` })),
+      el("p", { class: "where", text: first.message }));
+    if (all.widths.length) {
+      body.append(el("div", { class: "ruler", role: "img", "aria-label": `Measured at ${widthText(all)}` },
+        el("span", { style: `left:${pct(lo(all))}%;width:${pct(hi(all)) - pct(lo(all))}%` })));
+    }
+    const candidates = (first.source_candidates || []).slice(0, 1);
+    if (candidates.length) body.append(el("p", { class: "src" }, "Likely source: ", sourceLink(candidates[0])));
+    body.append(el("ul", { class: "places" }, routes.slice(0, 12).map((r) => el("li", { text: r })), routes.length > 12 ? el("li", { text: `+${routes.length - 12} more` }) : null));
+    const fold = el("details", { class: "cause" }, el("summary", { text: `Show all ${group.length} findings` }));
+    fold.addEventListener("toggle", () => { if (fold.open && fold.children.length === 1) fold.append(...group.map((i) => card(i, true))); });
+    body.append(fold);
+    const sev = ["P1", "P2", "P3"][worst(group)] || first.severity;
+    return el("article", { class: `issue ${sev}` }, el("div", { class: "sev", text: sev }), body);
+  }
   function render() {
     const shown = issues.filter((i) => matches(i, false));
     const list = $("issues");
     list.replaceChildren();
-    const groups = new Map();
-    for (const i of shown) { if (!groups.has(i.route)) groups.set(i.route, []); groups.get(i.route).push(i); }
-    const worst = (group) => Math.min(...group.map((i) => ORDER[i.severity] ?? 9));
-    for (const [route, group] of [...groups].sort((a, b) => worst(a[1]) - worst(b[1]) || b[1].length - a[1].length)) {
-      const tally = ["P1", "P2", "P3"].map((s) => [s, group.filter((i) => i.severity === s).length]).filter(([, n]) => n).map(([s, n]) => `${n} ${s}`).join(" · ");
-      list.append(el("div", { class: "route" }, el("h2", { text: route }), el("span", { text: tally })), ...group.map(card));
+    if (state.view === "route") {
+      const groups = new Map();
+      for (const i of shown) { if (!groups.has(i.route)) groups.set(i.route, []); groups.get(i.route).push(i); }
+      for (const [route, group] of [...groups].sort((a, b) => worst(a[1]) - worst(b[1]) || b[1].length - a[1].length)) {
+        list.append(el("div", { class: "route" }, el("h2", { text: route }), el("span", { text: tally(group) })), ...group.map((i) => card(i, false)));
+      }
+    } else {
+      // One card per cause: the same component broken on five routes is one thing to fix.
+      const causes = new Map();
+      for (const i of shown) { const key = i.group || i.id; if (!causes.has(key)) causes.set(key, []); causes.get(key).push(i); }
+      const places = (group) => new Set(group.map((i) => i.route)).size;
+      for (const group of [...causes.values()].sort((a, b) => worst(a) - worst(b) || places(b) - places(a) || b.length - a.length)) {
+        list.append(group.length === 1 ? causeOfOne(group[0]) : cause(group));
+      }
     }
     if (!shown.length) {
       const filtered = state.sev.size || state.route || state.check || state.text || state.width !== null;
@@ -332,11 +382,14 @@ a.btn { color: inherit; text-decoration: none; }
       if (filtered) { const clear = el("button", { class: "btn", text: "Clear filters" }); clear.addEventListener("click", reset); empty.append(clear); }
       list.append(empty);
     }
-    $("count").textContent = shown.length === issues.length ? `${issues.length} findings` : `${shown.length} of ${issues.length} findings`;
+    const causeCount = new Set(shown.map((i) => i.group || i.id)).size;
+    $("count").textContent = (shown.length === issues.length ? `${issues.length} findings` : `${shown.length} of ${issues.length} findings`) +
+      (causeCount < shown.length ? ` · ${causeCount} causes` : "");
     const chip = $("f-width");
     chip.hidden = state.width === null;
     chip.textContent = state.width === null ? "" : `At ${state.width}px · clear`;
     for (const button of document.querySelectorAll("[data-sev]")) button.setAttribute("aria-pressed", state.sev.has(button.dataset.sev));
+    for (const button of document.querySelectorAll("[data-view]")) button.setAttribute("aria-pressed", state.view === button.dataset.view);
     drawMap();
   }
   function reset() {
@@ -349,10 +402,21 @@ a.btn { color: inherit; text-decoration: none; }
     if (state.sev.has(sev)) state.sev.delete(sev); else state.sev.add(sev);
     render();
   });
+  for (const button of document.querySelectorAll("[data-view]")) button.addEventListener("click", () => { state.view = button.dataset.view; render(); });
   $("f-route").addEventListener("change", (e) => { state.route = e.target.value; render(); });
   $("f-check").addEventListener("change", (e) => { state.check = e.target.value; render(); });
   $("f-text").addEventListener("input", (e) => { state.text = e.target.value.trim().toLowerCase(); render(); });
   $("f-width").addEventListener("click", () => { state.width = null; render(); });
+
+  // Pages that measured clean for the wrong reason
+  const doubtful = audited.filter((r) => r.content && r.content.state !== "ok");
+  if (doubtful.length) {
+    const why = { "loading": "still loading", "error-like": "shows an error or unavailable message", "thin": "almost empty" };
+    $("notice").hidden = false;
+    $("notice").append(el("strong", { text: `${doubtful.length} page${doubtful.length === 1 ? "" : "s"} may not show real content. ` }),
+      "A clean result there means little: check the page by hand, or give it data or a sign-in.",
+      el("ul", {}, doubtful.map((r) => el("li", {}, el("code", { text: r.path }), ` ${why[r.content.state] || r.content.state}${r.content.detail ? ` (${r.content.detail})` : ""}`))));
+  }
 
   // Routes
   const skipped = routes.filter((r) => !audited.includes(r));
@@ -362,7 +426,8 @@ a.btn { color: inherit; text-decoration: none; }
   const table = el("table", {}, el("tr", {}, el("th", { text: "Route" }), el("th", { text: "Result" }), el("th", { text: "Found by" })));
   for (const r of routes) {
     const ok = audited.includes(r);
-    const result = ok ? `${issues.filter((i) => i.route === r.path).length} findings` : (r.loaded === false ? "could not load" : (r.status || "").replace(/^skipped: /, "skipped, "));
+    const doubt = ok && r.content && r.content.state !== "ok" ? `, content ${r.content.state}` : "";
+    const result = ok ? `${issues.filter((i) => i.route === r.path).length} findings${doubt}` : (r.loaded === false ? "could not load" : (r.status || "").replace(/^skipped: /, "skipped, "));
     table.append(el("tr", {}, el("td", { text: r.path }), el("td", { class: ok ? "ok" : "skip", text: result }), el("td", { class: "ok", text: (r.discovered_by || []).join(", ") })));
   }
   $("routes").append(table);

@@ -35,7 +35,7 @@ Outputs in the output directory:
 
 | File | What it is |
 |---|---|
-| `report.json` | Source of truth: routes, states, coverage, captures, issues with widths, selectors, evidence and source candidates |
+| `report.json` | Source of truth: routes, states, coverage, captures, issues with widths, selectors, evidence and source candidates, and `groups`: the issues folded by cause (one component broken on five routes is one group) |
 | `index.html` | Report viewer: findings grouped by route, a width map showing where they sit, filters, and a screenshot viewer. One self-contained file, no server |
 | `shots/*.png` | Clean and annotated full-page screenshots (sideways overflow included) |
 | `semantic-review.md`, `semantic-packet.json` | A bounded packet (≤12 screenshots) for the agent's visual judgement |
@@ -97,6 +97,10 @@ ui-audit audit --storage-state .ui-audit/auth.json
 ```
 
 `login` saves the browser's cookies and local storage to `.ui-audit/auth.json` (or `--save <file>`); set `storage_state` in `ui-audit.toml` to use it on every run. You type the password yourself, in the browser; `ui-audit` never sees or stores it. The saved file works like a password for that account, so keep `.ui-audit/` out of version control, and sign in again when the session expires.
+
+## Pages that measure clean for the wrong reason
+
+A page that is still loading, shows an error or "unavailable" message, or is almost empty has nothing to overflow. Each measured route gets `content.state` in `report.json` (`ok`, `loading`, `error-like` or `thin`); the summary and the viewer list every route that is not `ok`, because zero findings there says nothing about the real page. Give such a route its data or a sign-in and run it again.
 
 ## Consent banners and setup
 

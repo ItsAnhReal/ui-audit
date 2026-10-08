@@ -6,11 +6,15 @@ import json
 from importlib import resources
 from pathlib import Path
 
+from .issues import assign_groups
+
 REPORT_JSON = "report.json"
 REPORT_HTML = "index.html"
 
 
 def write_json(report: dict, out_dir: Path) -> Path:
+    # Derived from the issues every time, so merged agent findings are grouped too.
+    report["groups"] = assign_groups(report["issues"])
     path = out_dir / REPORT_JSON
     path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return path
@@ -35,13 +39,14 @@ def audited_routes(report: dict) -> list[dict]:
 
 
 # Fields the viewer reads. Rects and DOM hints stay in report.json only.
-_ISSUE_FIELDS = ("id", "check", "severity", "origin", "route", "state", "selector", "message", "widths", "evidence")
+_ISSUE_FIELDS = ("id", "group", "check", "severity", "origin", "route", "state", "selector", "message", "widths", "evidence")
 _REPORT_FIELDS = ("version", "created", "base_url", "project_root", "routes", "skipped_dynamic_routes",
                   "truncated_routes", "consent_dismissed", "states", "breakpoints", "captures", "errors", "stats")
 
 
 def _viewer_data(report: dict) -> dict:
     data = {key: report[key] for key in _REPORT_FIELDS if key in report}
+    assign_groups(report["issues"])  # reports written before grouping existed get it here
     data["config"] = {"viewports": (report.get("config") or {}).get("viewports", {})}
     data["issues"] = [
         {**{key: issue[key] for key in _ISSUE_FIELDS if key in issue},

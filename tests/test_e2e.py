@@ -193,3 +193,21 @@ def test_saved_session_is_reused_by_the_audit(demo_site, tmp_path):
     assert saved.stat().st_mode & 0o777 == 0o600
     cfg.storage_state = str(saved)
     assert audit.run(cfg, log=lambda _: None)["coverage"]["/pricing.html|default"] == [390]
+
+
+def test_pages_without_real_content_are_called_out(demo_site, tmp_path):
+    url, site = demo_site
+    page = "<!doctype html><html lang=en><head><meta charset=utf-8><title>t</title></head><body>{}</body></html>"
+    (site / "gone.html").write_text(page.format("<h1>This menu is temporarily unavailable.</h1><p>" + "Try later. " * 30 + "</p>"))
+    (site / "thin.html").write_text(page.format("<p>Coming soon.</p>"))
+    (site / "busy.html").write_text(page.format('<main aria-busy="true"><p>' + "Loading the dashboard. " * 20 + "</p></main>"))
+    (site / "busy-too.html").write_text((site / "busy.html").read_text())
+    included = ["/pricing.html", "/gone.html", "/thin.html", "/busy.html", "/busy-too.html"]
+    cfg = config(url, site, tmp_path / "run", routes={"include": included}, states={"auto": False},
+                 viewports={"widths": [390]})
+    report = audit.run(cfg, log=lambda _: None)
+    content = {r["path"]: r["content"]["state"] for r in report["routes"]}
+    # Two pages that are both still loading look alike; neither is skipped as a copy of the other.
+    assert content == {"/pricing.html": "ok", "/gone.html": "error-like", "/thin.html": "thin",
+                       "/busy.html": "loading", "/busy-too.html": "loading"}
+    assert report["groups"] == [] or all(g["issue_ids"] for g in report["groups"])

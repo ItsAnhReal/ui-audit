@@ -14,6 +14,7 @@
   const TEXT_FIELD = "textarea,select,input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=reset]):not([type=image]):not([type=range]):not([type=color]):not([type=file])";
   const CONSENT_DECLINE = /only (the )?(necessary|essential|required)|(necessary|essential|required)( cookies)? only|reject|decline|deny|refuse|nur (notwendige|erforderliche|essenzielle)|ablehnen|refuser|rechazar|rifiuta/i;
   const CONSENT_TOPIC = /cookie|consent|einwilligung/i;
+  const PROBLEM_HEADING = /not found|unavailable|went wrong|\berror\b|access denied|forbidden|no longer exists|nicht gefunden|nicht verfügbar|\bfehler\b|kein zugriff|introuvable|indisponible|no encontrad|no disponible/i;
   const DEFAULT_UNSAFE = [
     "delete", "remove", "logout", "log out", "sign out", "signout", "pay", "buy", "purchase",
     "checkout", "order", "submit", "send", "publish", "unsubscribe", "cancel subscription",
@@ -532,6 +533,22 @@
     return `${expanded}|${shown}`;
   }
 
+  // Whether the page shows what it is for. A skeleton, an error screen or an almost
+  // empty page measures clean and says nothing about the real page.
+  function contentState() {
+    const shown = (sel) => Array.from(document.querySelectorAll(sel)).filter(isVisible);
+    const busy = shown('[aria-busy="true"],[role=progressbar]').length;
+    const skeletons = shown('[class*="skeleton" i],[class*="shimmer" i]').length;
+    if (busy || skeletons >= 3) return { state: "loading", detail: busy ? "a region is still marked busy" : `${skeletons} skeleton placeholders` };
+    const heading = shown("h1,h2,[role=heading]").map((el) => (el.innerText || "").replace(/\s+/g, " ").trim()).find(Boolean) || "";
+    if (PROBLEM_HEADING.test(heading)) return { state: "error-like", detail: heading.slice(0, 80) };
+    const text = (document.body ? document.body.innerText : "").replace(/\s+/g, " ").trim();
+    // Little to read and next to nothing to operate. A sign-in form is short too, but it has controls.
+    const controls = shown(INTERACTIVE).length;
+    if (text.length < 250 && controls < 3) return { state: "thin", detail: `${text.length} characters of text, ${controls} control${controls === 1 ? "" : "s"}` };
+    return { state: "ok", detail: "" };
+  }
+
   // Identifies what a route renders, independent of its URL, so the audit can
   // tell a not-found page or an alias from a page of its own.
   function pageFingerprint() {
@@ -585,6 +602,6 @@
   }
 
   window.__uiAudit = {
-    probe, breakpoints, stateCandidates, consentDecline, domFingerprint, pageFingerprint, isTriggerVisible, annotate, clearAnnotations,
+    probe, breakpoints, stateCandidates, consentDecline, contentState, domFingerprint, pageFingerprint, isTriggerVisible, annotate, clearAnnotations,
   };
 })();

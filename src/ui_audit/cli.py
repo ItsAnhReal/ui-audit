@@ -173,6 +173,14 @@ def cmd_audit(args) -> int:
     print(f"{counts['P1']} P1 · {counts['P2']} P2 · {counts['P3']} P3 across {len(audited)} route(s), "
           f"{len(result['states'])} state(s), {len(result['captures'])} screenshot(s) ({megabytes:.1f} MB), "
           f"{result['stats']['probes']} probes in {result['stats']['seconds']}s")
+    groups = len(result.get("groups", []))
+    if groups and groups < sum(counts.values()):
+        print(f"{sum(counts.values())} findings come from {groups} distinct causes; see groups[] in report.json")
+    for route in audited:
+        content = route.get("content") or {}
+        if content.get("state", "ok") != "ok":
+            print(f"check by hand: {route['path']} may not show its real content "
+                  f"({content['state']}: {content['detail']}), so a clean result there means little")
     skipped = len(result["routes"]) - len(audited)
     if skipped:
         print(f"{skipped} route(s) skipped as not found or duplicate; see routes[].status in report.json")
