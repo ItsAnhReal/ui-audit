@@ -30,6 +30,8 @@ def test_routes_for_changes_picks_what_a_change_can_affect():
     assert routes_for_changes(baseline, ["README.md", "api/server.py"])[0] == []
     assert routes_for_changes(baseline, ["src/Pricing.tsx"])[0] == ["/pricing"]
     assert routes_for_changes(baseline, ["src/Card.tsx"])[0] == ["/", "/pricing"]
+    # Every extension the source mapper reads counts as UI source, MDX included.
+    assert routes_for_changes(baseline, ["src/Pricing.mdx"])[0] == ["/", "/pricing"]
     # A stylesheet or an unseen component could reach any page.
     assert routes_for_changes(baseline, ["src/Pricing.tsx", "src/index.css"])[0] == ["/", "/pricing"]
     for route in baseline["routes"]:

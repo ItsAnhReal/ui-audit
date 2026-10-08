@@ -269,3 +269,12 @@ def test_setup_actions_are_replayed_on_every_page(demo_site, tmp_path):
     unset = audit.run(config(url, site, tmp_path / "unset", routes={"include": ["/promo.html"]},
                              states={"auto": False}, viewports={"widths": [390]}), log=lambda _: None)
     assert found(unset, "horizontal-overflow", "/promo.html")
+
+
+def test_key_width_mode_probes_a_range_without_presets(demo_site, tmp_path):
+    url, site = demo_site
+    cfg = config(url, site, tmp_path / "run", routes={"include": ["/"]}, states={"sweep": "key"},
+                 viewports={"min_width": 410, "max_width": 470, "breakpoint_neighbors": False})
+    report = audit.run(cfg, log=lambda _: None)
+    opened = [s for s in report["states"] if s["id"] != "default"]
+    assert opened and all(s["status"] == "audited" for s in opened)

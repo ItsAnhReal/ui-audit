@@ -12,6 +12,7 @@ from pathlib import Path
 
 from . import __version__
 from .config import CONFIG_FILENAME, ConfigError, load, render_template
+from .sources import SOURCE_EXTS
 
 SKILL_TARGETS = {
     ("project", "claude"): Path(".claude/skills/ui-audit"),
@@ -184,7 +185,6 @@ def cmd_report(args) -> int:
     return 0
 
 
-UI_SOURCE_EXTS = {".tsx", ".jsx", ".ts", ".js", ".vue", ".svelte", ".astro", ".css", ".scss", ".sass", ".less", ".html"}
 
 
 def _git_changed(project_root: str, ref: str) -> list[str]:
@@ -202,7 +202,7 @@ def routes_for_changes(baseline: dict, changed: list[str]) -> tuple[list[str], s
     """Which routes of a previous full audit a set of changed files can affect, and why."""
     audited = [r for r in baseline["routes"] if r.get("status", "audited") == "audited" and r.get("loaded", True)]
     every = [r["path"] for r in audited]
-    touched = [f for f in changed if Path(f).suffix in UI_SOURCE_EXTS]
+    touched = [f for f in changed if Path(f).suffix in SOURCE_EXTS]
     if not touched:
         return [], "no UI source file changed"
     known = set().union(*(set(r.get("sources") or []) for r in audited)) if audited else set()

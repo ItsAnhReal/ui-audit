@@ -179,7 +179,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                         {w for _, w, _ in STANDARD_VIEWPORTS if lo <= w <= hi}
                         | (set(viewports.breakpoint_neighbors(breakpoints, lo, hi)) if vc.breakpoint_neighbors else set())
                         | {w for w in initial_anomalies if lo <= w <= hi}
-                    )
+                    ) or sorted({lo, hi})  # a range with no preset still gets probed
                 else:
                     probe_widths = sorted(
                         set(viewports.sweep_widths(lo, hi, vc.sweep_step))
@@ -240,8 +240,11 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     plans = [viewports.CapturePlan(w, ["requested"]) for w in probe_widths]
                 else:
                     bp_widths = viewports.breakpoint_neighbors(breakpoints, lo, hi) if vc.breakpoint_neighbors else []
+                    # Key-width mode does not refine, so its anomalies are the initial page's, where probed.
+                    anomalies = sweep.anomalies + ([w for w in sorted(initial_anomalies)
+                                                    if w in results and w not in sweep.anomalies] if key_only else [])
                     plans = viewports.select_captures(
-                        standard, bp_widths, sweep.anomalies, {w for w, r in results.items() if r["issues"]},
+                        standard, bp_widths, anomalies, {w for w, r in results.items() if r["issues"]},
                         vc.max_captures, lo, hi)
                 plans = [p for p in plans if p.width not in not_applicable]
 
