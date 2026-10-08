@@ -13,7 +13,8 @@ from .issues import IssueSet, sweep_signature
 from .sources import SourceIndex
 
 NOT_APPLICABLE = frozenset({"<state not applicable>"})
-SWEEP_SETTLE_MS = 60
+# The sweep waits for running transitions (browser.settle) rather than for a fixed time.
+SWEEP_SETTLE_MS = 0
 CANDIDATE_FACTOR = 8
 
 

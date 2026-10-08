@@ -62,6 +62,9 @@ class RuntimeLog:
         # Browsers request /favicon.ico on their own; its absence is noise.
         if urlparse(url).path == "/favicon.ico":
             return
+        # The page cancelled the request itself (it navigated or unmounted); nothing failed.
+        if "ERR_ABORTED" in reason:
+            return
         self.failed_resources.append(f"{url} ({reason})"[:300])
 
     def clear(self) -> None:
@@ -89,6 +92,14 @@ def session(cfg):
         page.on("response", lambda res: res.status >= 400 and log.on_failure(res.url, str(res.status)))
         try:
             yield page, log
+            if cfg.storage_state:
+                # Sign-in tokens rotate while the app runs; keep the newest ones so the next
+                # audit does not start from a token that has already been exchanged.
+                try:
+                    context.storage_state(path=cfg.storage_state)
+                    Path(cfg.storage_state).chmod(0o600)
+                except Exception:  # noqa: BLE001 - a read-only session file still works for this run
+                    pass
         finally:
             context.close()
             browser.close()
