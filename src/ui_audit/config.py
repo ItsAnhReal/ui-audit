@@ -166,7 +166,7 @@ annotate = true
 storage_state = ""
 # Chromium executable; leave empty to use Playwright's own browser.
 browser_path = ""
-# Actions run once on "/" before anything is measured.
+# Actions run on "/" before anything is measured and again on every page loaded.
 # setup = [{{ click = "#close-promo" }}]
 
 [routes]

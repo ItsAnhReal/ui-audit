@@ -126,7 +126,7 @@ A page that is still loading, shows an error or "unavailable" message, or is alm
 
 A cookie banner sits on top of every page and hides what is under it. With `[states] dismiss_consent = true` (the default) `ui-audit` looks for the banner's button that turns optional cookies down ("Only necessary", "Reject", "Ablehnen", …), clicks it once, and audits the pages a returning visitor sees. It never clicks "Accept all". The label it clicked is recorded as `consent_dismissed` in `report.json`. Set it to `false` to audit the first-visit view with the banner open.
 
-For anything else that has to be out of the way first, list actions in `setup`; they run once on `/` before anything is measured:
+For anything else that has to be out of the way first, list actions in `setup`; they run once on `/` before anything is measured (a failure there is reported in `errors`), and again on every page that is loaded, so a dismissal the app does not remember stays dismissed. An action whose target is not on the page is skipped:
 
 ```toml
 setup = [{ click = "#close-promo" }]

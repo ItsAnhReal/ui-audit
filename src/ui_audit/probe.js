@@ -577,10 +577,17 @@
     const path = location.pathname;
     if (path.length > 1) text = text.split(path).join("");
     text = text.replace(/\s+/g, " ").trim();
-    let hash = 0;
-    for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) | 0;
-    const shown = document.body ? Array.from(document.body.querySelectorAll("*")).filter(isVisible).length : 0;
-    return `${text.length}:${hash}:${shown}`;
+    const hashOf = (s) => {
+      let h = 0;
+      for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+      return h;
+    };
+    const visible = document.body ? Array.from(document.body.querySelectorAll("*")).filter(isVisible) : [];
+    // Same text in different markup (a button here, a link there) is a different page:
+    // its controls, styles and images can have defects of their own.
+    const structure = visible.map((el) => [el.tagName, el.getAttribute("class") || "", el.getAttribute("role") || "",
+      el.getAttribute("type") || "", el.getAttribute("src") || ""].join(" ")).join("\n");
+    return `${text.length}:${hashOf(text)}:${visible.length}:${hashOf(structure)}`;
   }
 
   function isTriggerVisible(selector) {

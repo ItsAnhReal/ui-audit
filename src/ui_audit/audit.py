@@ -126,7 +126,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                 break
             runtime.clear()
             try:
-                response = browser.load(page, cfg.base_url, path, 1280, 900, cfg.settle_ms)
+                response = states.open_page(page, cfg, path, 1280, 900)
             except Exception as exc:  # noqa: BLE001 - keep auditing the other routes
                 errors.append(f"{path}: could not load ({exc.__class__.__name__}: {str(exc)[:120]})")
                 route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": False})
@@ -136,7 +136,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                 consent = states.dismiss_consent(page, cfg)
                 if consent:
                     runtime.clear()
-                    response = browser.load(page, cfg.base_url, path, 1280, 900, cfg.settle_ms)
+                    response = states.open_page(page, cfg, path, 1280, 900)
             content = page.evaluate("() => window.__uiAudit.contentState()")
             skip = (_skip_reason(page, response, path, missing, seen_pages, seen_paths, content["state"] == "loading")
                     if dedupe else None)
