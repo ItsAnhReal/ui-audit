@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ui-audit"
+version = "0.1.0"
+description = "Responsive UI Auditor: give your AI coding agent eyes across routes, UI states and responsive widths."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["playwright>=1.45"]
+
+[project.optional-dependencies]
+diff = ["Pillow>=10"]
+dev = ["pytest>=8", "Pillow>=10"]
+
+[project.scripts]
+ui-audit = "ui_audit.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ui_audit = ["probe.js", "skill/SKILL.md", "report_template.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["e2e: launches a real Chromium against the demo app"]

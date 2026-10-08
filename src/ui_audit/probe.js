@@ -1,0 +1,422 @@
+// Injected into every page as an init script. Defines window.__uiAudit.
+// Everything here is read-only except annotate()/clearAnnotations(), which
+// add and remove an overlay that every probe ignores.
+(() => {
+  if (window.__uiAudit) return;
+
+  const OVERLAY_ATTR = "data-ui-audit-overlay";
+  const INTERACTIVE = [
+    "a[href]", "button", "input:not([type=hidden])", "select", "textarea", "summary",
+    "[role=button]", "[role=link]", "[role=tab]", "[role=menuitem]", "[role=checkbox]",
+    "[role=switch]", "[tabindex]:not([tabindex='-1'])",
+  ].join(",");
+  const LAYER = "[role=menu],[role=dialog],[role=listbox],[role=tooltip],[popover],dialog,[aria-modal=true]";
+  const DEFAULT_UNSAFE = [
+    "delete", "remove", "logout", "log out", "sign out", "signout", "pay", "buy", "purchase",
+    "checkout", "order", "submit", "send", "publish", "unsubscribe", "cancel subscription",
+    "löschen", "entfernen", "abmelden", "kaufen", "bestellen", "bezahlen", "senden",
+  ];
+
+  function isIgnored(el, ignore) {
+    if (el.closest(`[${OVERLAY_ATTR}]`)) return true;
+    for (const selector of ignore || []) {
+      try { if (el.closest(selector)) return true; } catch (e) { /* invalid selector */ }
+    }
+    return false;
+  }
+
+  function isVisible(el) {
+    if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) {
+      return false;
+    }
+    const style = getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function isScreenReaderOnly(el) {
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 2 || rect.height <= 2) return true;
+    const style = getComputedStyle(el);
+    return style.clip === "rect(0px, 0px, 0px, 0px)" || style.clipPath === "inset(50%)";
+  }
+
+  function stableClasses(el) {
+    return Array.from(el.classList)
+      .filter((c) => c.length <= 30 && !/[:\[\]\/.@%]/.test(c))
+      .slice(0, 2);
+  }
+
+  function cssPath(el) {
+    if (el.id && document.querySelectorAll(`#${CSS.escape(el.id)}`).length === 1) {
+      return `#${CSS.escape(el.id)}`;
+    }
+    const parts = [];
+    let node = el;
+    while (node && node.nodeType === 1 && parts.length < 5) {
+      if (node === document.body || node === document.documentElement) {
+        parts.unshift(node.tagName.toLowerCase());
+        break;
+      }
+      if (node.id && document.querySelectorAll(`#${CSS.escape(node.id)}`).length === 1) {
+        parts.unshift(`#${CSS.escape(node.id)}`);
+        break;
+      }
+      let part = node.tagName.toLowerCase();
+      const classes = stableClasses(node);
+      if (classes.length) part += classes.map((c) => `.${CSS.escape(c)}`).join("");
+      const parent = node.parentElement;
+      if (parent) {
+        const same = Array.from(parent.children).filter((c) => c.tagName === node.tagName);
+        if (same.length > 1) part += `:nth-of-type(${same.indexOf(node) + 1})`;
+      }
+      parts.unshift(part);
+      node = node.parentElement;
+    }
+    return parts.join(" > ");
+  }
+
+  function clippingAncestor(el) {
+    for (let node = el.parentElement; node && node !== document.body && node !== document.documentElement; node = node.parentElement) {
+      const ox = getComputedStyle(node).overflowX;
+      if (ox !== "visible") return { node, mode: ox };
+    }
+    return null;
+  }
+
+  function hasOwnText(el) {
+    for (const child of el.childNodes) {
+      if (child.nodeType === 3 && child.textContent.trim()) return true;
+    }
+    return false;
+  }
+
+  function snippet(el) {
+    return (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 60);
+  }
+
+  function accessibleName(el) {
+    const label = el.getAttribute("aria-label");
+    if (label && label.trim()) return label.trim();
+    const labelledBy = el.getAttribute("aria-labelledby");
+    if (labelledBy) {
+      const text = labelledBy.split(/\s+/).map((id) => document.getElementById(id))
+        .filter(Boolean).map((n) => n.textContent.trim()).join(" ");
+      if (text) return text;
+    }
+    if (el.labels && el.labels.length) {
+      const text = Array.from(el.labels).map((l) => l.textContent.trim()).join(" ");
+      if (text) return text;
+    }
+    const text = (el.innerText || el.textContent || "").trim();
+    if (text) return text;
+    if (el.getAttribute("title")) return el.getAttribute("title").trim();
+    const img = el.querySelector("img[alt]");
+    if (img && img.alt.trim()) return img.alt.trim();
+    const svgTitle = el.querySelector("svg title");
+    if (svgTitle && svgTitle.textContent.trim()) return svgTitle.textContent.trim();
+    if (el.tagName === "INPUT" && ["button", "submit", "reset"].includes(el.type) && el.value) return el.value;
+    if (el.tagName === "INPUT" && el.type === "image" && el.alt) return el.alt;
+    if (el.placeholder) return el.placeholder.trim();
+    return "";
+  }
+
+  function sourceInfo(el) {
+    const components = [];
+    const files = [];
+    const addFile = (file, line) => {
+      if (file && !files.some((f) => f.file === file)) files.push({ file, line: line || null });
+    };
+    let node = el;
+    for (let depth = 0; node && depth < 15; depth++, node = node.parentElement) {
+      const fiberKey = Object.keys(node).find((k) => k.startsWith("__reactFiber$"));
+      if (fiberKey) {
+        let fiber = node[fiberKey];
+        for (let hops = 0; fiber && hops < 30; hops++, fiber = fiber.return) {
+          if (fiber._debugSource) addFile(fiber._debugSource.fileName, fiber._debugSource.lineNumber);
+          if (typeof fiber.type === "function") {
+            const name = fiber.type.displayName || fiber.type.name;
+            if (name && name.length > 1 && !components.includes(name)) components.push(name);
+          }
+          if (components.length >= 3) break;
+        }
+        break;
+      }
+      const vue = node.__vueParentComponent;
+      if (vue && vue.type) {
+        const name = vue.type.__name || vue.type.name;
+        if (name && !components.includes(name)) components.push(name);
+        addFile(vue.type.__file);
+        break;
+      }
+      if (node.__svelte_meta && node.__svelte_meta.loc) {
+        addFile(node.__svelte_meta.loc.file, node.__svelte_meta.loc.line);
+        break;
+      }
+    }
+    return {
+      components,
+      files,
+      id: el.id || null,
+      classes: Array.from(el.classList).slice(0, 8),
+      contextClasses: [el.parentElement, el.parentElement && el.parentElement.parentElement]
+        .filter((n) => n && n !== document.body).flatMap((n) => Array.from(n.classList)).slice(0, 6),
+      tag: el.tagName.toLowerCase(),
+      text: snippet(el),
+    };
+  }
+
+  function rectOf(el) {
+    const r = el.getBoundingClientRect();
+    return {
+      x: Math.round(r.left + window.scrollX), y: Math.round(r.top + window.scrollY),
+      width: Math.round(r.width), height: Math.round(r.height),
+    };
+  }
+
+  function makeIssue(check, severity, el, message) {
+    return { check, severity, selector: cssPath(el), message, rect: rectOf(el), hints: sourceInfo(el) };
+  }
+
+  function probe(opts) {
+    opts = opts || {};
+    const ignore = opts.ignoreSelectors || [];
+    const minTarget = opts.minTarget || 24;
+    const overlapThreshold = opts.overlapThreshold || 0.2;
+    const maxPer = opts.maxPerCheck || 15;
+    const vw = document.documentElement.clientWidth || window.innerWidth;
+    const issues = [];
+    const counts = {};
+    const push = (issue) => {
+      counts[issue.check] = (counts[issue.check] || 0) + 1;
+      if (counts[issue.check] <= maxPer) issues.push(issue);
+    };
+
+    const all = Array.from(document.body ? document.body.querySelectorAll("*") : [])
+      .filter((el) => !isIgnored(el, ignore) && !["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "BR"].includes(el.tagName));
+    const visible = all.filter(isVisible);
+
+    // 1. Horizontal page overflow and its top-most culprits.
+    const scrollWidth = Math.max(document.documentElement.scrollWidth, document.body ? document.body.scrollWidth : 0);
+    const pageOverflows = scrollWidth > vw + 1;
+    const beyondRight = (el) => el.getBoundingClientRect().right + window.scrollX > vw + 1;
+    if (pageOverflows) {
+      const culprits = visible.filter((el) => {
+        if (!beyondRight(el)) return false;
+        if (getComputedStyle(el).position === "fixed") return false;
+        if (clippingAncestor(el)) return false;
+        const parent = el.parentElement;
+        return !parent || parent === document.body || parent === document.documentElement || !beyondRight(parent);
+      });
+      if (culprits.length) {
+        for (const el of culprits) {
+          const right = Math.round(el.getBoundingClientRect().right + window.scrollX);
+          push(makeIssue("horizontal-overflow", "P1", el,
+            `Extends to ${right}px in a ${vw}px viewport (page scrolls sideways by ${scrollWidth - vw}px).`));
+        }
+      } else {
+        push(makeIssue("horizontal-overflow", "P1", document.documentElement,
+          `Page is ${scrollWidth}px wide in a ${vw}px viewport.`));
+      }
+    }
+
+    // 2. Content or controls cut off at the viewport edge.
+    for (const el of visible) {
+      const r = el.getBoundingClientRect();
+      const straddlesLeft = r.left < -1 && r.right > 1;
+      const straddlesRight = !pageOverflows && r.left < vw - 1 && r.right > vw + 1;
+      if (!straddlesLeft && !straddlesRight) continue;
+      // Inside any non-visible overflow container: a carousel or a container
+      // clip, which the clipped-content check reports at the container.
+      if (clippingAncestor(el)) continue;
+      const parent = el.parentElement;
+      if (parent && parent !== document.body) {
+        const pr = parent.getBoundingClientRect();
+        if ((pr.left < -1 && pr.right > 1) || (!pageOverflows && pr.left < vw - 1 && pr.right > vw + 1)) continue;
+      }
+      const interactive = el.matches(INTERACTIVE);
+      if (!interactive && !hasOwnText(el) && !el.querySelector(INTERACTIVE)) continue;
+      const edge = straddlesLeft ? "left" : "right";
+      if (interactive) {
+        push(makeIssue("offscreen-control", "P1", el, `Control is cut off at the ${edge} edge of a ${vw}px viewport.`));
+      } else {
+        push(makeIssue("offscreen-content", "P2", el, `Content is cut off at the ${edge} edge of a ${vw}px viewport.`));
+      }
+    }
+
+    // 3. Text clipped by its own box, or spilling out of it.
+    for (const el of visible) {
+      if (["INPUT", "TEXTAREA", "SELECT", "HTML", "BODY"].includes(el.tagName)) continue;
+      if (isScreenReaderOnly(el)) continue;
+      if (!el.innerText || !el.innerText.trim()) continue;
+      const style = getComputedStyle(el);
+      const clipsX = style.overflowX === "hidden" || style.overflowX === "clip";
+      const clipsY = style.overflowY === "hidden" || style.overflowY === "clip";
+      const overX = el.scrollWidth > el.clientWidth + 1 && el.clientWidth > 0;
+      const overY = el.scrollHeight > el.clientHeight + 1 && el.clientHeight > 0;
+      const clamped = style.textOverflow === "ellipsis" || (style.webkitLineClamp && style.webkitLineClamp !== "none");
+      if ((clipsX && overX) || (clipsY && overY)) {
+        if (clamped) continue;
+        const axis = clipsX && overX ? `${el.scrollWidth - el.clientWidth}px horizontally` : `${el.scrollHeight - el.clientHeight}px vertically`;
+        push(makeIssue("clipped-content", "P2", el, `Content is clipped by ${axis}: "${snippet(el)}"`));
+      } else if (style.overflowX === "visible" && overX && hasOwnText(el) && style.display !== "inline") {
+        push(makeIssue("text-spill", "P3", el, `Text spills ${el.scrollWidth - el.clientWidth}px outside its box: "${snippet(el)}"`));
+      }
+    }
+
+    // 4. Interactive controls: overlap, target size, accessible name.
+    const controls = visible.filter((el) => el.matches(INTERACTIVE)).slice(0, 400);
+    const boxes = controls.map((el) => el.getBoundingClientRect());
+    for (let i = 0; i < controls.length; i++) {
+      for (let j = i + 1; j < controls.length; j++) {
+        const a = controls[i], b = controls[j];
+        if (a.contains(b) || b.contains(a)) continue;
+        const ra = boxes[i], rb = boxes[j];
+        const w = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left);
+        const h = Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top);
+        if (w <= 0 || h <= 0) continue;
+        const ratio = (w * h) / Math.min(ra.width * ra.height, rb.width * rb.height);
+        if (ratio < overlapThreshold) continue;
+        if (a.closest(LAYER) !== b.closest(LAYER)) continue;
+        const cx = Math.max(ra.left, rb.left) + w / 2, cy = Math.max(ra.top, rb.top) + h / 2;
+        if (cx >= 0 && cy >= 0 && cx <= window.innerWidth && cy <= window.innerHeight) {
+          const top = document.elementFromPoint(cx, cy);
+          if (top && !a.contains(top) && !b.contains(top) && !top.contains(a) && !top.contains(b)) continue;
+        }
+        push(makeIssue("overlapping-controls", "P2", b,
+          `Overlaps ${cssPath(a)} by ${Math.round(ratio * 100)}% of the smaller control.`));
+      }
+    }
+
+    for (const el of controls) {
+      const r = el.getBoundingClientRect();
+      if (r.width >= minTarget && r.height >= minTarget) continue;
+      if (el.tagName === "A" && getComputedStyle(el).display === "inline" && el.parentElement && hasOwnText(el.parentElement)) continue;
+      if (isScreenReaderOnly(el)) continue;
+      push(makeIssue("small-target", vw < 768 ? "P2" : "P3", el,
+        `Target is ${Math.round(r.width)}×${Math.round(r.height)}px; minimum is ${minTarget}×${minTarget}px.`));
+    }
+
+    for (const el of controls) {
+      if (accessibleName(el)) continue;
+      push(makeIssue("unnamed-control", "P2", el, `${el.tagName.toLowerCase()} has no accessible name.`));
+    }
+
+    return {
+      viewport: { width: vw, height: window.innerHeight },
+      scrollWidth,
+      scrollHeight: document.documentElement.scrollHeight,
+      issues,
+      truncated: Object.fromEntries(Object.entries(counts).filter(([, n]) => n > maxPer)),
+    };
+  }
+
+  function breakpoints() {
+    const found = new Set();
+    const toPx = (value, unit) => Math.round(parseFloat(value) * (unit === "px" ? 1 : 16));
+    const read = (text) => {
+      for (const m of text.matchAll(/(min|max)-width\s*:\s*([\d.]+)(px|em|rem)/g)) {
+        found.add(toPx(m[2], m[3]));
+      }
+      for (const m of text.matchAll(/width\s*(<=|>=|<|>)\s*([\d.]+)(px|em|rem)/g)) {
+        found.add(toPx(m[2], m[3]));
+      }
+    };
+    const walk = (rules) => {
+      for (const rule of rules) {
+        if (rule.media && rule.media.mediaText) read(rule.media.mediaText);
+        if (rule.cssRules) {
+          try { walk(rule.cssRules); } catch (e) { /* ignore */ }
+        }
+      }
+    };
+    for (const sheet of document.styleSheets) {
+      try {
+        if (sheet.media && sheet.media.mediaText) read(sheet.media.mediaText);
+        walk(sheet.cssRules);
+      } catch (e) { /* cross-origin sheet */ }
+    }
+    return Array.from(found).filter((n) => n > 0).sort((a, b) => a - b);
+  }
+
+  function stateCandidates(opts) {
+    opts = opts || {};
+    const unsafe = DEFAULT_UNSAFE.concat(opts.unsafeWords || []).map((w) => w.toLowerCase());
+    const selectors = [
+      ["[aria-expanded=false]", "expand"],
+      ["[aria-haspopup]:not([aria-expanded=true])", "popup"],
+      ["[role=tab][aria-selected=false]", "tab"],
+      ["details:not([open]) > summary", "details"],
+      ["[data-ui-audit-state]", "marked"],
+    ];
+    const out = [];
+    const seen = new Set();
+    for (const [selector, kind] of selectors) {
+      for (const el of document.querySelectorAll(selector)) {
+        if (seen.has(el) || !isVisible(el) || isIgnored(el, opts.ignoreSelectors)) continue;
+        seen.add(el);
+        if (el.closest("form")) continue;
+        if (el.matches("[type=submit]")) continue;
+        if (el.tagName === "A") {
+          const href = el.getAttribute("href") || "";
+          if (href && !href.startsWith("#") && !href.startsWith("javascript:")) continue;
+        }
+        const name = (accessibleName(el) || "").toLowerCase();
+        if (unsafe.some((w) => name.includes(w))) continue;
+        out.push({ selector: cssPath(el), kind, label: accessibleName(el).slice(0, 40) || kind });
+      }
+    }
+    return out;
+  }
+
+  function domFingerprint() {
+    const expanded = Array.from(document.querySelectorAll("[aria-expanded],[aria-selected],details,[open]"))
+      .map((el) => `${el.getAttribute("aria-expanded")}${el.getAttribute("aria-selected")}${el.open}`).join("");
+    const shown = Array.from(document.body.querySelectorAll("*")).filter(isVisible).length;
+    return `${expanded}|${shown}`;
+  }
+
+  function isTriggerVisible(selector) {
+    try {
+      const el = document.querySelector(selector);
+      return !!el && isVisible(el);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function annotate(items) {
+    clearAnnotations();
+    const layer = document.createElement("div");
+    layer.setAttribute(OVERLAY_ATTR, "");
+    layer.style.cssText = "position:absolute;left:0;top:0;width:0;height:0;z-index:2147483647;pointer-events:none;";
+    const colors = { P1: "#d92d20", P2: "#dc6803", P3: "#7a5af8" };
+    let drawn = 0;
+    for (const item of items) {
+      let el = null;
+      try { el = document.querySelector(item.selector); } catch (e) { el = null; }
+      if (!el) continue;
+      const r = rectOf(el);
+      const color = colors[item.severity] || "#d92d20";
+      const box = document.createElement("div");
+      box.style.cssText = `position:absolute;left:${r.x}px;top:${r.y}px;width:${Math.max(r.width, 2)}px;height:${Math.max(r.height, 2)}px;outline:3px solid ${color};outline-offset:-1px;background:${color}1a;`;
+      const tag = document.createElement("div");
+      tag.textContent = `${item.index}. ${item.check}`;
+      const docWidth = document.documentElement.scrollWidth;
+      tag.style.cssText = `position:absolute;left:${Math.max(Math.min(r.x, docWidth - 170), 0)}px;top:${Math.max(r.y - 18, 0)}px;font:600 11px/16px system-ui,sans-serif;color:#fff;background:${color};padding:0 4px;border-radius:2px;white-space:nowrap;`;
+      layer.append(box, tag);
+      drawn++;
+    }
+    document.body.append(layer);
+    return drawn;
+  }
+
+  function clearAnnotations() {
+    for (const el of document.querySelectorAll(`[${OVERLAY_ATTR}]`)) el.remove();
+  }
+
+  window.__uiAudit = {
+    probe, breakpoints, stateCandidates, domFingerprint, isTriggerVisible, annotate, clearAnnotations,
+  };
+})();

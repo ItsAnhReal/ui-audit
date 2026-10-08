@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Demo · Dashboard</title>
+<link rel="stylesheet" href="styles.css"></head>
+<body>
+<header>
+  <span class="brand">Acme Cloud</span>
+  <nav class="site-nav"><a href="index.html">Home</a><a href="pricing.html">Pricing</a></nav>
+</header>
+<main>
+  <h1>Dashboard</h1>
+  <div role="tablist" aria-label="Views">
+    <button role="tab" id="tab-overview" aria-selected="true" aria-controls="panel-overview">Overview</button>
+    <button role="tab" id="tab-reports" aria-selected="false" aria-controls="panel-reports">Reports</button>
+  </div>
+  <section id="panel-overview" class="panel" role="tabpanel"><p>All systems operational.</p></section>
+  <section id="panel-reports" class="panel" role="tabpanel" hidden>
+    <div class="report-box">Weekly report: deployments up 12%, error rate down 3%, p95 latency 180ms, 42 incidents resolved, 7 open, next review on Monday with the platform team.</div>
+  </section>
+  <details>
+    <summary>Advanced filters</summary>
+    <div class="filters"><input placeholder="From date"><input placeholder="To date"></div>
+  </details>
+</main>
+<script>
+  for (const tab of document.querySelectorAll('[role=tab]')) {
+    tab.addEventListener('click', () => {
+      for (const other of document.querySelectorAll('[role=tab]')) {
+        other.setAttribute('aria-selected', String(other === tab));
+        document.getElementById(other.getAttribute('aria-controls')).hidden = other !== tab;
+      }
+    });
+  }
+</script>
+</body>
+</html>

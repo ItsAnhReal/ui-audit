@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Demo · Home</title>
+<link rel="stylesheet" href="styles.css"></head>
+<body>
+<header>
+  <span class="brand">Acme Cloud</span>
+  <button class="menu-button" aria-expanded="false" aria-controls="nav">Menu</button>
+  <nav id="nav" class="site-nav">
+    <a href="index.html">Home</a>
+    <a href="pricing.html">Pricing</a>
+    <a href="dashboard.html">Dashboard</a>
+    <a href="pricing.html#enterprise">Enterprise solutions</a>
+  </nav>
+  <button class="icon-button"></button>
+</header>
+<main>
+  <h1>Ship faster with Acme Cloud</h1>
+  <p>Everything you need to deploy, observe and scale your applications.</p>
+  <section class="features">
+    <div class="card"><h2>Deploy</h2><p>Push to deploy from any branch.</p></div>
+    <div class="card"><h2>Observe</h2><p>Logs, traces and metrics in one place.</p></div>
+    <div class="card"><h2>Scale</h2><p>Autoscaling that follows your traffic.</p></div>
+    <div class="card"><h2>Secure</h2><p>Secrets, SSO and audit logs built in.</p></div>
+  </section>
+</main>
+<script>
+  const button = document.querySelector('.menu-button');
+  const nav = document.getElementById('nav');
+  button.addEventListener('click', () => {
+    const open = button.getAttribute('aria-expanded') === 'true';
+    button.setAttribute('aria-expanded', String(!open));
+    nav.classList.toggle('open', !open);
+  });
+</script>
+</body>
+</html>

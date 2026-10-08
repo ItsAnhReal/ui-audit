@@ -1,0 +1,138 @@
+"""Viewport selection: which widths to probe and which to capture.
+
+The sweep probes cheaply (no screenshots) across the width range. Wherever
+the set of objective issues changes between two sweep points, a binary search
+finds the exact pixel where it changes. Screenshots are then taken at a
+bounded, explainable set of widths.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Callable, Iterable
+
+from .config import STANDARD_VIEWPORTS
+
+Signature = frozenset[str]
+
+
+def height_for(width: int) -> int:
+    for _, preset_width, preset_height in STANDARD_VIEWPORTS:
+        if preset_width == width:
+            return preset_height
+    if width < 600:
+        return 844
+    if width < 1024:
+        return 1024
+    return 900
+
+
+def sweep_widths(min_width: int, max_width: int, step: int) -> list[int]:
+    if step <= 0:
+        raise ValueError("sweep_step must be positive")
+    widths = list(range(min_width, max_width + 1, step))
+    if widths[-1] != max_width:
+        widths.append(max_width)
+    return widths
+
+
+def breakpoint_neighbors(breakpoints: Iterable[int], min_width: int, max_width: int) -> list[int]:
+    """Each declared breakpoint N contributes N-1, N and N+1."""
+    widths: set[int] = set()
+    for bp in breakpoints:
+        for width in (bp - 1, bp, bp + 1):
+            if min_width <= width <= max_width:
+                widths.add(width)
+    return sorted(widths)
+
+
+def find_boundary(probe: Callable[[int], Signature], low: int, high: int,
+                  low_sig: Signature, high_sig: Signature) -> tuple[int, int, int]:
+    """Binary-search the last width that still looks like `low`.
+
+    Returns (last_low_width, first_changed_width, probes_used). Assumes the
+    signature changes at least once between `low` and `high`.
+    """
+    probes = 0
+    while high - low > 1:
+        mid = (low + high) // 2
+        sig = probe(mid)
+        probes += 1
+        if sig == low_sig:
+            low = mid
+        else:
+            high, high_sig = mid, sig
+    return low, high, probes
+
+
+@dataclass
+class SweepResult:
+    signatures: dict[int, Signature] = field(default_factory=dict)
+    anomalies: list[int] = field(default_factory=list)
+    probes: int = 0
+
+
+def sweep(probe: Callable[[int], Signature], widths: list[int], refine: bool = True,
+          max_refinements: int = 6) -> SweepResult:
+    """Probe every width, then pin down each place the signature changes."""
+    result = SweepResult()
+    for width in widths:
+        result.signatures[width] = probe(width)
+        result.probes += 1
+    if not refine:
+        return result
+    refinements = 0
+    for low, high in zip(widths, widths[1:]):
+        if refinements >= max_refinements:
+            break
+        low_sig, high_sig = result.signatures[low], result.signatures[high]
+        if low_sig == high_sig:
+            continue
+        last_low, first_high, used = find_boundary(probe, low, high, low_sig, high_sig)
+        result.probes += used
+        refinements += 1
+        for width in (last_low, first_high):
+            if width not in result.anomalies:
+                result.anomalies.append(width)
+    return result
+
+
+@dataclass
+class CapturePlan:
+    width: int
+    reasons: list[str]
+
+
+def select_captures(standard: list[int], breakpoint_widths: list[int], anomalies: list[int],
+                    with_issues: set[int], cap: int, min_width: int, max_width: int) -> list[CapturePlan]:
+    """Bounded capture set, filled in priority order.
+
+    1. standard presets (mobile, tablet, laptop, desktop)
+    2. anomaly boundaries where issues are present
+    3. declared breakpoint neighbours
+    4. remaining anomaly boundaries
+    """
+    reasons: dict[int, list[str]] = {}
+    order: list[int] = []
+
+    def add(width: int, reason: str) -> None:
+        if not min_width <= width <= max_width:
+            return
+        if width not in reasons:
+            reasons[width] = []
+            order.append(width)
+        if reason not in reasons[width]:
+            reasons[width].append(reason)
+
+    for width in standard:
+        add(width, "standard")
+    for width in anomalies:
+        if width in with_issues:
+            add(width, "anomaly")
+    for width in breakpoint_widths:
+        add(width, "breakpoint")
+    for width in anomalies:
+        add(width, "anomaly")
+
+    chosen = order[:cap] if cap > 0 else order
+    return [CapturePlan(width, reasons[width]) for width in sorted(chosen)]

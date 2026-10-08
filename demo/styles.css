@@ -1,0 +1,51 @@
+/* Demo app for ui-audit. Every defect below is deliberate and documented in README.md. */
+* { box-sizing: border-box; }
+body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #1d2433; }
+header { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; border-bottom: 1px solid #e4e7ec; position: relative; }
+.brand { font-weight: 700; }
+.menu-button { display: none; padding: 8px 12px; font: inherit; }
+.site-nav { display: flex; gap: 16px; }
+.site-nav a { padding: 8px 4px; }
+/* BUG small-target + unnamed-control: an 18px icon-only button with no label. */
+.icon-button { width: 18px; height: 18px; padding: 0; border: 1px solid #98a2b3; background: #fff; border-radius: 4px; }
+main { padding: 20px; max-width: 1100px; margin: 0 auto; }
+.features { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+.card { border: 1px solid #e4e7ec; border-radius: 8px; padding: 16px; }
+
+@media (max-width: 767px) {
+  .menu-button { display: inline-block; }
+  .site-nav { display: none; }
+  /* BUG offscreen-control: the open drawer sticks out past the right edge. */
+  .site-nav.open { display: flex; flex-direction: column; position: absolute; top: 56px; right: -60px; width: 260px; background: #fff; border: 1px solid #e4e7ec; padding: 12px; }
+}
+@media (min-width: 390px) { .brand { letter-spacing: 0.02em; } }
+/* BUG horizontal-overflow between presets: four fixed 220px columns only from 800 to 959px. */
+@media (min-width: 800px) and (max-width: 959px) {
+  .features { grid-template-columns: repeat(4, 220px); }
+}
+
+/* Pricing */
+.plans { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.plan-actions { position: relative; height: 44px; margin-top: 12px; }
+.plan-actions button { position: absolute; top: 0; height: 40px; padding: 0 14px; font: inherit; }
+.plan-actions .compare { left: 0; }
+.plan-actions .contact { left: 110px; }
+@media (max-width: 767px) {
+  /* BUG clipped-content: the price is cut off on phones. */
+  .price { display: block; width: 80px; overflow: hidden; white-space: nowrap; }
+}
+@media (min-width: 768px) and (max-width: 1023px) {
+  /* BUG overlapping-controls: the second button slides under the first on tablets. */
+  .plan-actions .contact { left: 40px; }
+}
+
+/* Dashboard */
+[role=tablist] { display: flex; gap: 4px; border-bottom: 1px solid #e4e7ec; }
+[role=tab] { padding: 10px 14px; border: 0; background: none; font: inherit; }
+[role=tab][aria-selected=true] { border-bottom: 2px solid #1d2433; }
+.panel { padding: 16px 0; }
+/* BUG clipped-content in the "Reports" tab state only. */
+.report-box { overflow: hidden; height: 60px; border: 1px solid #e4e7ec; padding: 8px; }
+.filters { display: flex; gap: 12px; padding: 12px 0; }
+/* BUG horizontal-overflow below ~400px, only when the filters are open. */
+.filters input { width: 180px; flex: none; padding: 8px; font: inherit; }

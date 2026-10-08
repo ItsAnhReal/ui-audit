@@ -1,0 +1,117 @@
+# ui-audit — Responsive UI Auditor
+
+**Give your AI coding agent eyes.** `ui-audit` drives Chromium through every route and safe UI state of a running web app, sweeps the whole width range, measures layout defects, takes a bounded set of annotated screenshots, points at the likely source files, and verifies fixes against a baseline.
+
+It is a local CLI plus one portable Agent Skill shared by Claude Code and Codex. No account, no cloud.
+
+```
+Discover → Sweep → Capture → Diagnose → Map to code → Patch → Targeted rerun → Verify → Full regression
+```
+
+## Why not just screenshot ten device sizes?
+
+Responsive bugs live *between* presets: a grid that overflows from 800 to 946 px is invisible at 768 and 1366. `ui-audit` probes the full range cheaply (no screenshots), and wherever the set of defects changes between two sweep points it binary-searches the exact pixel. Screenshots go to a bounded, explainable set of widths:
+
+1. the four presets (390, 768, 1366, 1920)
+2. anomaly boundaries where defects appear or disappear
+3. neighbours of every CSS breakpoint the page declares (N−1, N, N+1)
+
+## Install
+
+```bash
+pip install -e ".[dev]"          # from a checkout; Python 3.11+
+playwright install chromium      # or point --browser-path / UI_AUDIT_BROWSER_PATH at an existing Chromium
+```
+
+## Use
+
+```bash
+ui-audit init --base-url http://localhost:3000   # writes ui-audit.toml with routes found in your source
+ui-audit doctor                                   # Python, Chromium, config, app reachable, skills installed
+ui-audit audit --output .ui-audit/baseline        # full audit
+```
+
+Outputs in the output directory:
+
+| File | What it is |
+|---|---|
+| `report.json` | Source of truth: routes, states, coverage, captures, issues with widths, selectors, evidence and source candidates |
+| `index.html` | Contact sheet: issue table and screenshot grid per route and state |
+| `shots/*.png` | Clean and annotated full-page screenshots (sideways overflow included) |
+| `semantic-review.md`, `semantic-packet.json` | A bounded packet (≤12 screenshots) for the agent's visual judgement |
+
+After a fix, rerun only what changed and compare:
+
+```bash
+ui-audit audit --route /pricing --width 767,768,769,834 --output .ui-audit/fix-1
+ui-audit verify .ui-audit/baseline .ui-audit/fix-1 --pixel-diff
+```
+
+`verify` reports **fixed**, **introduced** and **persistent** issues. A baseline issue only counts as fixed if the new run probed its route, state and at least one of its widths; everything else is counted as out of scope. Agent findings only count as fixed after a new semantic review. Exit code 1 means a P1/P2 issue was introduced (`--strict` also fails on persistent ones).
+
+### Agent skill
+
+```bash
+ui-audit install-skill                 # .claude/skills/ui-audit and .codex/skills/ui-audit in this project
+ui-audit install-skill --scope user    # ~/.claude/skills and ~/.codex/skills
+```
+
+The skill (`src/ui_audit/skill/SKILL.md`) tells the agent how to run the loop: baseline, semantic review, triage, patch, targeted rerun, verify, full regression, and when to stop.
+
+## Checks
+
+| Check | Severity | Meaning |
+|---|---|---|
+| `horizontal-overflow` | P1 | The page scrolls sideways; reports the top-most element that sticks out |
+| `offscreen-control` / `offscreen-content` | P1 / P2 | A control or text is cut off at the viewport edge |
+| `clipped-content` | P2 | A box with hidden overflow cuts off its text (ellipsis and line-clamp are treated as intentional) |
+| `text-spill` | P3 | Text visibly overflows its box |
+| `overlapping-controls` | P2 | Two interactive controls overlap by ≥20% (menus and dialogs layered on purpose are excluded) |
+| `small-target` | P2 below 768px, else P3 | Pointer target smaller than 24×24px (WCAG 2.5.8); inline text links excluded |
+| `unnamed-control` | P2 | No accessible name |
+| `console-error`, `failed-resource` | P2 | Runtime errors while loading or entering a state |
+| `semantic-*` | agent-assigned | Findings merged from the agent's review, labelled `origin: agent` |
+
+Deterministic findings are measurements. They can still be intentional; add those selectors to `[checks] ignore_selectors`.
+
+## States
+
+Besides each route's initial state, `ui-audit` discovers states by clicking disclosure controls only: `aria-expanded`, `aria-haspopup`, tabs, `<details>`, and anything marked `data-ui-audit-state`. Discovery runs at 390 and 1280px, skips anything inside a form, navigating links, submit buttons and controls whose name sounds destructive (delete, pay, logout, …), and keeps a candidate only if the click changes the DOM without changing the URL. Anything else goes in `[[states.custom]]`:
+
+```toml
+[[states.custom]]
+name = "cart-open"
+route = "/shop"
+actions = [{ click = "#cart" }, { wait_for = ".cart-drawer" }]
+```
+
+Actions: `click`, `hover`, `fill` + `value`, `press`, `wait`, `wait_for`. For logged-in pages, save a Playwright storage state and set `storage_state`.
+
+## Routes
+
+Discovered from `[routes] include`, framework conventions in `project_root` (Next.js app and pages routers, Nuxt, Astro, SvelteKit, React Router route tables, static `*.html`), `sitemap.xml`, and a same-origin crawl. Dynamic routes are listed as skipped until you give a sample in `[routes] samples`.
+
+## Source hints
+
+For each issue, development builds give runtime hints (React `_debugSource` and component names, Vue `__file`, Svelte `__svelte_meta`). These, the element's id, classes, parent classes and text are used to rank up to three candidate files. They are search results for the agent to confirm, not conclusions.
+
+## Demo
+
+`demo/` is a small static site with deliberately planted defects (see `demo/README.md`):
+
+```bash
+python3 -m http.server 8765 -d demo &
+ui-audit audit http://localhost:8765 --project-root demo
+```
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+pytest                 # unit tests + end-to-end tests against the demo (≈1 min)
+pytest -m "not e2e"    # unit tests only
+```
+
+## Status
+
+Version 0.1.0. Not yet validated on a real application — see the project's definition of done. Known limits: Chromium only; source mapping is weak in production builds; automatic state discovery is intentionally shallow.
