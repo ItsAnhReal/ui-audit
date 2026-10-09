@@ -1,0 +1,46 @@
+# Runs the GitHub Action in this repository against the demo app, as a user's workflow would.
+name: action
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: ui-audit
+        uses: ./
+        with:
+          url: http://localhost:8765
+          start: python3 -m http.server 8765 -d demo
+          args: --project-root demo --fast
+          # The demo's defects are planted, and a pull request that changes a check may change
+          # what it finds; this job tests the action, not the demo.
+          fail-on: never
+
+      - name: Check what the action reported
+        env:
+          P1: ${{ steps.ui-audit.outputs.p1 }}
+          P2: ${{ steps.ui-audit.outputs.p2 }}
+          INTRODUCED: ${{ steps.ui-audit.outputs.introduced }}
+          REPORT_DIR: ${{ steps.ui-audit.outputs.report-dir }}
+          SUMMARY: ${{ steps.ui-audit.outputs.summary-file }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -x
+          test "$P1" -ge 2 && test "$P2" -ge 10        # demo/README.md lists the planted defects
+          test -f "$REPORT_DIR/report.json" && test -f "$REPORT_DIR/index.html"
+          grep -q "ui-audit" "$SUMMARY"
+          if [ "$EVENT" = pull_request ]; then
+            test -n "$INTRODUCED"                       # the base commit was audited and compared
+            test -f "$(dirname "$REPORT_DIR")/base/report.json"
+          else
+            test -z "$INTRODUCED"
+          fi

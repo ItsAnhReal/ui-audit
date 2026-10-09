@@ -6,6 +6,7 @@
 - `ui-audit verify`: fixed, introduced and persistent findings against a baseline, never counting something as fixed that the new run did not look at.
 - `ui-audit ui`: a local app to run audits, work through findings, hand them to an agent, re-check fixes and compare runs.
 - `ui-audit login`, `accept`, `--fast`, `--changed-since`, `--locale`, consent-banner handling, setup actions.
+- A GitHub Action (`uses: ItsAnhReal/ui-audit@…`) and `ui-audit ci`: audit a pull request and its base commit, comment what the change introduced and fixed, and fail on new P1/P2 findings.
 - One Agent Skill shared by Claude Code and Codex (`ui-audit install-skill`).
 
 Audits of Docusaurus, the Astro blog starter and the Bootstrap examples before release led to these fixes:

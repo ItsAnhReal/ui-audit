@@ -143,7 +143,55 @@ Some findings are intentional. `ui-audit accept <report folder> <issue or group 
 
 ## In CI
 
-[`examples/github-workflow.yml`](examples/github-workflow.yml) audits the routes a pull request touches and comments the comparison with the base branch. It is a starting point: starting your app and keeping a baseline report are yours to adapt.
+The repository is also a GitHub Action. On every pull request it starts your app twice, once from the base commit and once from the pull request, audits both, and comments what the change introduced and fixed. The job fails when a new P1 or P2 finding appears.
+
+```yaml
+# .github/workflows/ui-audit.yml
+name: ui-audit
+on: pull_request
+
+jobs:
+  ui-audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write   # for the comment
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: ItsAnhReal/ui-audit@main
+        with:
+          url: http://localhost:3000
+          install: npm ci
+          start: npm run dev -- --port 3000
+          args: --fast
+```
+
+`install` and `start` run in each checkout; `start` stays in the background and is stopped after each audit, so both runs use the same port. The comment is updated on later pushes rather than repeated, the job summary carries the same text, and both reports with their screenshots are uploaded as the `ui-audit-report` artifact (open `head/index.html`).
+
+| Input | Default | |
+|---|---|---|
+| `url` | required | where the app answers once it runs |
+| `start` | | command that starts the app; without it the app must already run and nothing is compared |
+| `install` | | command run before `start` in each checkout, e.g. `npm ci` |
+| `working-directory` | `.` | where the app lives in the repository |
+| `compare` | `auto` | `base`, `none`, or a folder with a committed `report.json`; `auto` is `base` on pull requests with a `start` command |
+| `changed-only` | `false` | audit only routes that render a changed file (with `compare: base`) |
+| `fail-on` | `new` | `new` (a P1 or P2 introduced), `P1`/`P2`/`P3` (any open finding at that level), or `never` |
+| `args` | | more `ui-audit audit` options, e.g. `--fast --route / --route /pricing` |
+| `comment` | `true` | comment on the pull request (pull requests from forks get a read-only token; the job summary still works) |
+
+Outputs: `p1`, `p2`, `p3`, `introduced`, `fixed`, `blocking`, `report-dir`, `summary-file`. Pin the action to a commit SHA if you want the same checks on every run.
+
+The action is a thin wrapper around `ui-audit ci`, which works the same way in any other CI system:
+
+```bash
+ui-audit ci http://localhost:3000 --install "npm ci" --start "npm run dev -- --port 3000" --base-ref origin/main --args "--fast"
+```
+
+It exits 1 when `--fail-on` is met and 2 when the app or the audit could not run, and writes both reports and `summary.md` to `.ui-audit/ci`.
 
 ## Pages behind a login
 
