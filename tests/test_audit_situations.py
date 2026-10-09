@@ -1,4 +1,7 @@
-"""Situations a real app (VibeSpace) showed the audit getting wrong, each on its own small page."""
+"""Situations real apps (VibeSpace, Docusaurus, Astro, the Bootstrap examples) showed the audit
+getting wrong, each on its own small page."""
+
+from pathlib import Path
 
 import pytest
 
@@ -78,3 +81,32 @@ def test_a_section_that_never_fades_in_makes_the_page_doubtful(demo_site, tmp_pa
     report = run(site, url, tmp_path, {"ghost.html": NEVER_SHOWN}, [1366])
     route = next(r for r in report["routes"] if r["path"] == "/ghost.html")
     assert route["content"] == {"state": "hidden", "detail": "1 section stays invisible"}
+
+
+FEED = '<?xml version="1.0"?><rss version="2.0"><channel><title>Blog</title><link>https://example.com/</link></channel></rss>'
+
+# Static progress bars, as a skills list or a cheatsheet shows them: content, not a page still loading.
+METERS = HEAD + """</style></head><body><h1>Skills</h1>
+<p>Profile page with enough text to read as a real page, not an empty one, for the content check.</p>
+<p>Below are the skills this person rated themselves on, each as a bar from zero to one hundred.
+The bars are drawn once and stay as they are; nothing on this page is still loading.</p>
+<div role="progressbar" aria-valuenow="70" aria-valuemin="0" aria-valuemax="100" style="height:8px;background:#ddd">
+<div style="width:70%;height:8px;background:#36c"></div></div></body></html>"""
+
+
+def test_a_feed_is_skipped_and_a_progress_meter_is_content(demo_site, tmp_path):
+    url, site = demo_site
+    report = run(site, url, tmp_path, {"rss.xml": FEED, "meters.html": METERS}, [390])
+    routes = {r["path"]: r for r in report["routes"]}
+    assert routes["/rss.xml"]["status"] == "skipped: not a web page (application/xml)"
+    assert routes["/meters.html"]["content"]["state"] == "ok"
+    assert not [i for i in report["issues"] if i["route"] == "/rss.xml"]
+
+
+def test_a_screen_reader_label_that_escapes_its_row_is_named(demo_site, tmp_path):
+    url, site = demo_site
+    page = (Path(__file__).parent / "cases" / "escaped-sr-only.html").read_text()
+    report = run(site, url, tmp_path, {"sr.html": page}, [390])
+    issue = next(i for i in report["issues"] if i["route"] == "/sr.html")
+    assert issue["selector"].endswith("span.sr-only")
+    assert issue["message"].startswith('Screen-reader-only text "opens the third card"')

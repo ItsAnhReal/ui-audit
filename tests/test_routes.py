@@ -83,3 +83,13 @@ def test_configured_routes_rank_before_source_guesses(tmp_path):
     result = discover(cfg)
     # Ranked, not cut: the audit spends max_routes on routes it actually measures.
     assert [r.path for r in result.routes] == ["/z", "/a", "/b"]
+
+
+def test_endpoints_that_serve_files_are_not_pages(tmp_path):
+    touch(tmp_path, "package.json", '{"dependencies": {"astro": "^5"}}')
+    touch(tmp_path, "src/pages/index.astro")
+    touch(tmp_path, "src/pages/rss.xml.js")
+    touch(tmp_path, "src/pages/legal.notice.astro")  # a page whose name has a dot
+    touch(tmp_path, "src/pages/blog/[...slug].astro")
+    found, dynamic = routes_from_source(tmp_path, {})
+    assert sorted(found) == ["/", "/legal.notice"] and dynamic == ["/blog/[...slug]"]

@@ -31,6 +31,14 @@ def _probe_opts(cfg: Config) -> dict:
     }
 
 
+def _not_a_page(response) -> str | None:
+    """The content type of a route that is a feed, a data file or an image rather than a page."""
+    if response is None:
+        return None
+    kind = (response.headers.get("content-type") or "").split(";")[0].strip().lower()
+    return None if not kind or kind in {"text/html", "application/xhtml+xml"} else kind
+
+
 def _skip_reason(page, response, path: str, missing: str | None, seen_pages: dict[str, str],
                  seen_paths: dict[str, str], loading: bool = False) -> str | None:
     """Why a freshly loaded route adds nothing to the audit, or None if it should be audited."""
@@ -178,6 +186,14 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     if engine_consent:
                         runtime.clear()
                         response = states.open_page(page, cfg, path, 1280, 900)
+                kind = _not_a_page(response)
+                if kind:
+                    if leading:
+                        route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": True,
+                                              "status": f"skipped: not a web page ({kind})"})
+                    log(f"{where(path)}: skipped (not a web page: {kind})")
+                    event("route", path=path, status="skipped", detail=f"not a web page ({kind})")
+                    continue
                 content = page.evaluate("() => window.__uiAudit.contentState()")
                 skip = (_skip_reason(page, response, path, missing, seen_pages, seen_paths, content["state"] == "loading")
                         if dedupe else None)
