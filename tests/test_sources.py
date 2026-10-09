@@ -1,3 +1,6 @@
+import re
+
+from ui_audit import sources
 from ui_audit.sources import SourceIndex
 
 
@@ -49,3 +52,58 @@ def test_rank_puts_the_app_file_before_a_shared_primitive(tmp_path):
     hints = {"files": [{"file": str(tmp_path / "src/components/ui/sheet.tsx"), "line": 60},
                        {"file": str(tmp_path / "src/TopBar.tsx"), "line": 81}]}
     assert [r["file"] for r in index.rank(hints)] == ["src/TopBar.tsx", "src/components/ui/sheet.tsx"]
+
+
+def _scan(root, hints, check):
+    """rank() as it was before the index: every pattern against every file."""
+    index = SourceIndex(root)
+    scores = {}
+    components = [c for c in hints.get("components") or [] if len(c) > 2]
+    classes = [c for c in hints.get("classes") or [] if not sources.UTILITY_CLASS.match(c)]
+    context = [c for c in hints.get("contextClasses") or [] if not sources.UTILITY_CLASS.match(c) and c not in classes]
+    element_id, text = hints.get("id"), (hints.get("text") or "").strip()
+    text = text[:40] if len(text) >= 6 else ""
+    for path, content in index.files():
+        found = scores.setdefault(index.relative(str(path)), [])
+        for position, component in enumerate(components):
+            if path.stem == component:
+                found.append((6 if position == 0 else 3, f"component {component}"))
+            elif re.search(rf"\b(?:function|const|class)\s+{re.escape(component)}\b", content):
+                found.append((4 if position == 0 else 2, f"defines {component}"))
+        if element_id and re.search(rf"""(?:id\s*=\s*["']{re.escape(element_id)}["']|#{re.escape(element_id)}\b)""", content):
+            found.append((4, f"id {element_id}"))
+        for cls in classes + context:
+            if re.search(rf"(?<![\w-]){re.escape(cls)}(?![\w-])", content):
+                sized = check in sources.SIZE_CHECKS and sources.SIZED_CLASS.search(cls)
+                found.append((5 if sized else 1, f"class {cls}"))
+        if text and text in content:
+            found.append((3, "visible text"))
+    ranked = sorted(((f, sum(p for p, _ in r), [w for _, w in r]) for f, r in scores.items() if r),
+                    key=lambda e: (-e[1], e[0]))
+    return [e for e in ranked if e[1] >= 2]
+
+
+def test_the_index_finds_what_scanning_every_file_finds(tmp_path):
+    (tmp_path / "src").mkdir()
+    files = {
+        "Card.tsx": "export class Card-ish {}",  # a stem match with no definition in it
+        "Grid.tsx": "const Grid = () => <div className='w-[324px] grid-cols-[repeat(2,9.75rem)] nav-item' />",
+        "page.html": '<main id="main-content"><p>Welcome back to the dashboard</p></main>',
+        "styles.css": "#main-content { width: 100% } .nav-item-wide { } .nav-item { } .x.nav-item:hover {}",
+        "Header.vue": "<script>const Headerish = 1; function Header() {}</script> Hello, welcome back",
+    }
+    for name, content in files.items():
+        (tmp_path / "src" / name).write_text(content)
+    hints = [
+        {"components": ["Card", "Header"], "classes": ["w-[324px]", "nav-item"], "id": "main-content",
+         "text": "elcome back to the dashboa"},
+        {"components": ["Grid"], "classes": ["grid-cols-[repeat(2,9.75rem)]"], "contextClasses": ["nav-item"]},
+        {"id": "main-content", "text": "Welcome back"},
+        {"classes": ["--", "nav-item-wide"], "text": "x y z w"},
+    ]
+    index = SourceIndex(tmp_path)
+    for hint in hints:
+        for check in ("horizontal-overflow", "small-target"):
+            ranked = [(e["file"], e["score"], e["reasons"]) for e in index.rank(hint, limit=10, check=check)]
+            assert ranked == _scan(tmp_path, hint, check)
+    assert len(index.rank(hints[0], limit=10)) >= 3  # the cases above do match something
