@@ -21,6 +21,18 @@
     "löschen", "entfernen", "abmelden", "kaufen", "bestellen", "bezahlen", "senden",
   ];
 
+  // probe() keeps every element's computed style for the length of one measurement: the
+  // helpers below ask for the same ancestors' styles over and over. The page does not change
+  // while it is measured, and outside probe() every call goes to the browser.
+  const browserStyle = window.getComputedStyle.bind(window);
+  let styleCache = null;
+  function getComputedStyle(el, pseudo) {
+    if (!styleCache || pseudo) return browserStyle(el, pseudo);
+    let style = styleCache.get(el);
+    if (!style) styleCache.set(el, style = browserStyle(el));
+    return style;
+  }
+
   function isIgnored(el, ignore) {
     if (el.closest(`[${OVERLAY_ATTR}]`)) return true;
     for (const selector of ignore || []) {
@@ -442,16 +454,24 @@
     return needed > box + 1 ? { node: parent, needed: Math.round(needed), box: Math.round(box) } : null;
   }
 
+  // Selector, box and source hints are worked out only for findings that are reported: a check
+  // over its cap still counts the rest, and a path is several document-wide queries.
   function makeIssue(check, severity, el, message) {
+    return { check, severity, el, message };
+  }
+
+  function finishIssue({ check, severity, el, message }) {
     return { check, severity, selector: cssPath(el), message, rect: rectOf(el), hints: sourceInfo(el) };
   }
 
   function probe(opts) {
     pathCache = new Map();
+    styleCache = new Map();
     try {
       return measure(opts);
     } finally {
       pathCache = null;
+      styleCache = null;
     }
   }
 
@@ -467,7 +487,7 @@
     const counts = {};
     const push = (issue) => {
       counts[issue.check] = (counts[issue.check] || 0) + 1;
-      if (counts[issue.check] <= maxPer) issues.push(issue);
+      if (counts[issue.check] <= maxPer) issues.push(finishIssue(issue));
     };
 
     const all = Array.from(document.body ? document.body.querySelectorAll("*") : [])
@@ -573,12 +593,14 @@
     for (const el of visible) {
       if (["INPUT", "TEXTAREA", "SELECT", "HTML", "BODY"].includes(el.tagName)) continue;
       if (isScreenReaderOnly(el)) continue;
-      if (!el.innerText || !el.innerText.trim()) continue;
       const style = getComputedStyle(el);
       const clipsX = style.overflowX === "hidden" || style.overflowX === "clip";
       const clipsY = style.overflowY === "hidden" || style.overflowY === "clip";
       const overX = el.scrollWidth > el.clientWidth + 1 && el.clientWidth > 0;
       const overY = el.scrollHeight > el.clientHeight + 1 && el.clientHeight > 0;
+      if (!overX && !overY) continue;
+      // innerText lays out the whole subtree, so it is read only for boxes that overflow.
+      if (!el.innerText || !el.innerText.trim()) continue;
       const clamped = truncates(style);
       if ((clipsX && overX) || (clipsY && overY)) {
         if (clamped) continue;
