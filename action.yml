@@ -32,7 +32,7 @@ inputs:
     required: false
     default: auto
   changed-only:
-    description: With `compare: base`, audit only the routes that render a file the pull request changed.
+    description: "With `compare: base`, audit only the routes that render a file the pull request changed."
     required: false
     default: "false"
   fail-on:
@@ -46,7 +46,7 @@ inputs:
     required: false
     default: ""
   comment:
-    description: Post the result as a pull request comment and update it on later pushes (needs `pull-requests: write`).
+    description: "Post the result as a pull request comment and update it on later pushes (needs `pull-requests: write`)."
     required: false
     default: "true"
   wait-timeout:
