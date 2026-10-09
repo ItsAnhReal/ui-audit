@@ -124,7 +124,7 @@ def test_app_is_started_waited_for_and_stopped(tmp_path):
 
 
 def test_a_start_command_that_dies_is_reported_with_its_output(tmp_path):
-    app = ci.App("echo boom; exit 3", tmp_path, tmp_path / "app.log")
+    app = ci.App("echo boom&& exit 3", tmp_path, tmp_path / "app.log")  # sh and cmd.exe alike
     with pytest.raises(ci.CIError, match="exited with code 3") as caught:
         app.start(f"http://127.0.0.1:{free_port()}/", timeout=10)
     assert "boom" in str(caught.value)

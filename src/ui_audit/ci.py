@@ -57,8 +57,10 @@ class App:
                           "stop it or let ui-audit start the app")
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         log = self.log_path.open("w", encoding="utf-8")
+        group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"  # type: ignore[attr-defined]
+                 else {"start_new_session": True})
         self.process = subprocess.Popen(self.command, shell=True, cwd=self.cwd, stdout=log, stderr=subprocess.STDOUT,
-                                        start_new_session=True)
+                                        **group)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if _answers(url):
@@ -71,7 +73,14 @@ class App:
         raise CIError(f"{url} did not answer within {timeout:.0f}s of starting the app\n{self.tail()}")
 
     def stop(self, url: str | None = None) -> None:
-        if self.process and self.process.poll() is None:
+        if self.process and self.process.poll() is None and os.name == "nt":
+            # cmd.exe passes nothing on to the app it started; end the whole process tree.
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(self.process.pid)], capture_output=True)
+            try:
+                self.process.wait(10)
+            except subprocess.TimeoutExpired:
+                pass
+        elif self.process and self.process.poll() is None:
             for sig, wait in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
                 try:
                     os.killpg(self.process.pid, sig)
