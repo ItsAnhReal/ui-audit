@@ -345,6 +345,10 @@ def is_blocking(fail_on: str, current: dict | None, comparison: dict | None) -> 
 
 
 def run(args) -> int:
+    # The app's install and start commands run code from the pull request: they must not see the
+    # token that posts the comment. GITHUB_TOKEN is read too, for runs outside the action.
+    tokens = [os.environ.pop(name, None) for name in ("UI_AUDIT_GITHUB_TOKEN", "GITHUB_TOKEN")]
+    token = next((t for t in tokens if t), None)
     cwd = Path(args.working_directory or ".").resolve()
     out = (cwd / args.output).resolve() if not Path(args.output).is_absolute() else Path(args.output)
     head_dir, base_dir = out / "head", out / "base"
@@ -374,8 +378,11 @@ def run(args) -> int:
                                start=args.start, timeout=args.wait_timeout, label="base")
                 baseline_dir = base_dir
             except CIError as exc:
+                # Without the base there is no telling what this change introduced: fail rather
+                # than pass a check that could not look.
                 notes.append(f"The base commit could not be audited, so nothing is compared: {exc}".splitlines()[0])
-                print(f"warning: {exc}", file=sys.stderr)
+                print(f"error: {exc}", file=sys.stderr)
+                failed = args.fail_on != "never"
             finally:
                 remove_worktree(cwd, worktree)
         elif compare != "none":
@@ -415,7 +422,6 @@ def run(args) -> int:
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
             handle.write(summary.replace(MARKER + "\n", "") + "\n")
     if args.comment and gh["pr"] and gh["repo"]:
-        token = os.environ.get("GITHUB_TOKEN")
         if not token:
             print("warning: no GITHUB_TOKEN, so no pull request comment", file=sys.stderr)
         else:

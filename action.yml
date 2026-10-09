@@ -121,7 +121,7 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        GITHUB_TOKEN: ${{ inputs.github-token }}
+        UI_AUDIT_GITHUB_TOKEN: ${{ inputs.github-token }}
         UI_AUDIT_ARTIFACT: ${{ inputs.artifact-name }}
         INPUT_URL: ${{ inputs.url }}
         INPUT_START: ${{ inputs.start }}

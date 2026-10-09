@@ -169,7 +169,7 @@ jobs:
           args: --fast
 ```
 
-`install` and `start` run in each checkout; `start` stays in the background and is stopped after each audit, so both runs use the same port. The comment is updated on later pushes rather than repeated, the job summary carries the same text, and both reports with their screenshots are uploaded as the `ui-audit-report` artifact (open `head/index.html`).
+`install` and `start` run in each checkout; `start` stays in the background and is stopped after each audit, so both runs use the same port. The token that posts the comment is kept away from `install`, `start` and the audit, which run the pull request's code. The comment is updated on later pushes rather than repeated, the job summary carries the same text, and both reports with their screenshots are uploaded as the `ui-audit-report` artifact (open `head/index.html`).
 
 | Input | Default | |
 |---|---|---|
@@ -179,7 +179,7 @@ jobs:
 | `working-directory` | `.` | where the app lives in the repository |
 | `compare` | `auto` | `base`, `none`, or a folder with a committed `report.json`; `auto` is `base` on pull requests with a `start` command |
 | `changed-only` | `false` | audit only routes that render a changed file (with `compare: base`) |
-| `fail-on` | `new` | `new` (a P1 or P2 introduced), `P1`/`P2`/`P3` (any open finding at that level), or `never` |
+| `fail-on` | `new` | `new` (a P1 or P2 introduced), `P1`/`P2`/`P3` (any open finding at that level), or `never`; unless `never`, a base commit that cannot be audited fails the job too |
 | `args` | | more `ui-audit audit` options, e.g. `--fast --route / --route /pricing` |
 | `comment` | `true` | comment on the pull request (pull requests from forks get a read-only token; the job summary still works) |
 

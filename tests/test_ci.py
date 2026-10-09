@@ -137,3 +137,34 @@ def test_run_reports_an_app_that_never_answers(tmp_path, monkeypatch):
     code = main(["ci", f"http://127.0.0.1:{free_port()}/", "--compare", "none", "--output", str(tmp_path / "out")])
     assert code == 2
     assert "could not audit" in (tmp_path / "out" / "summary.md").read_text()
+
+
+def test_a_base_that_cannot_be_audited_fails_the_run_and_the_token_stays_out_of_the_app(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "index.html").write_text("x")
+    git("init", "-q", cwd=repo)
+    git("add", ".", cwd=repo)
+    git("commit", "-qm", "base", cwd=repo)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setenv("UI_AUDIT_GITHUB_TOKEN", "secret")
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path / "temp"))
+    seen = []
+
+    def fake_audit(*, label, output, **_):
+        seen.append(("UI_AUDIT_GITHUB_TOKEN" in ci.os.environ, "GITHUB_TOKEN" in ci.os.environ))
+        if label == "base":
+            raise ci.CIError("the start command exited with code 1")
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "report.json").write_text(json.dumps(report()))
+
+    monkeypatch.setattr(ci, "audit_checkout", fake_audit)
+    from ui_audit.cli import main
+
+    out = tmp_path / "out"
+    assert main(["ci", "http://127.0.0.1:1/", "--start", "x", "--base-ref", "HEAD", "--working-directory", str(repo),
+                 "--output", str(out)]) == 2
+    assert seen == [(False, False), (False, False)]
+    assert "The base commit could not be audited" in (out / "summary.md").read_text()
+    assert main(["ci", "http://127.0.0.1:1/", "--start", "x", "--base-ref", "HEAD", "--working-directory", str(repo),
+                 "--output", str(out), "--fail-on", "never"]) == 0
