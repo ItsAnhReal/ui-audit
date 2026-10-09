@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from ui_audit import browser
+from ui_audit import audit, browser
 from ui_audit.config import from_dict
 
 
@@ -49,3 +49,26 @@ def test_settle_waits_for_fonts_still_loading(slow_font_site, tmp_path):
         assert page.evaluate("document.fonts.status") == "loading"
         browser.settle(page, 0)
         assert page.evaluate("document.fonts.status") == "loaded"
+
+
+TRACKED = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Tracked</title>
+<script async src="https://www.google-analytics.com/analytics.js"></script></head>
+<body><main><h1>Tracked page</h1><img alt="" src="http://pixel.tracker.test/p.gif"></main></body></html>"""
+
+
+@pytest.mark.e2e
+@pytest.mark.usefixtures("chromium_available")
+def test_blocked_trackers_are_not_failed_resources(demo_site, tmp_path):
+    url, site = demo_site
+    (site / "tracked.html").write_text(TRACKED)
+
+    def failed(block):
+        cfg = from_dict({"base_url": url, "project_root": str(site), "output": str(tmp_path / str(len(block))),
+                         "settle_ms": 0, "block_requests": block, "states": {"auto": False},
+                         "routes": {"include": ["/tracked.html"], "discover": ["config"]},
+                         "viewports": {"widths": [390]}})
+        report = audit.run(cfg, log=lambda _: None)
+        return [i["message"] for i in report["issues"] if i["check"] == "failed-resource"]
+
+    assert failed(["trackers", "tracker.test"]) == []
+    assert any("pixel.tracker.test" in m for m in failed([]))
