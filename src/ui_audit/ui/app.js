@@ -536,21 +536,23 @@
     show();
   }
   // The part of a screenshot worth zooming into: the marked boxes with some room around them,
-  // at least a phone's width of context, never taller than wide. Null when zooming would barely help.
-  function zoomCrop(rects, W, H, cssWidth) {
+  // at least a phone's width of context, never taller than wide. Screenshots are taken at a device
+  // pixel ratio of 1, so image and CSS pixels match. Null when zooming would barely enlarge it.
+  function zoomCrop(rects, W, H, frameWidth) {
     if (!rects.length || !W || !H) return null;
     const x0 = Math.min(...rects.map((r) => r.x)), y0 = Math.min(...rects.map((r) => r.y));
     const x1 = Math.max(...rects.map((r) => r.x + r.width)), y1 = Math.max(...rects.map((r) => r.y + r.height));
-    const dpr = cssWidth ? W / cssWidth : 1;
-    const pad = Math.max(40 * dpr, 0.3 * Math.max(x1 - x0, y1 - y0));
-    let w = Math.max(x1 - x0 + 2 * pad, 360 * dpr);
+    const pad = Math.max(40, 0.3 * Math.max(x1 - x0, y1 - y0));
+    let w = Math.max(x1 - x0 + 2 * pad, 360);
     let ht = y1 - y0 + 2 * pad;
     if (ht > w * 0.75) w = ht / 0.75;
     ht = Math.min(Math.max(ht, w * 0.4), w * 0.75);
     w = Math.min(w, W); ht = Math.min(ht, H);
-    if (w > W * 0.7) return null;
+    // fitted, the whole screenshot shows at most at its real size; the close-up at most at twice that
+    const frame = frameWidth || W;
+    if (Math.min(2, frame / w) < Math.min(1, frame / W) * 1.3) return null;
     const clamp = (v, max) => Math.min(Math.max(0, v), max);
-    return { x: clamp((x0 + x1) / 2 - w / 2, W - w), y: clamp((y0 + y1) / 2 - ht / 2, H - ht), width: w, height: ht, dpr };
+    return { x: clamp((x0 + x1) / 2 - w / 2, W - w), y: clamp((y0 + y1) / 2 - ht / 2, H - ht), width: w, height: ht };
   }
   function drawBoxes(stage, img, boxes, onPlaced) {
     const place = () => {
@@ -1782,7 +1784,7 @@
       // zoom into the marked element once the image's real size is known, before the boxes are placed
       const zoom = () => {
         const W = img.naturalWidth, H = img.naturalHeight;
-        const crop = zoomCrop(boxes.filter((b) => !b.other).map((b) => b.rect), W, H, capture.width);
+        const crop = zoomCrop(boxes.filter((b) => !b.other).map((b) => b.rect), W, H, wrapEl.clientWidth);
         zoomBtn.hidden = !crop;
         zoomBtn.setAttribute("aria-pressed", String(!!crop && vs.zoom));
         if (!crop || !vs.zoom) return;
@@ -1790,7 +1792,7 @@
         fitBtn.hidden = true;
         stage.className = "stage";
         // at most twice the real size, so small elements don't turn into a blur
-        const frame = h("div", { class: "crop", style: { aspectRatio: `${crop.width} / ${crop.height}`, maxWidth: `${Math.round((crop.width / crop.dpr) * 2)}px` } });
+        const frame = h("div", { class: "crop", style: { aspectRatio: `${crop.width} / ${crop.height}`, maxWidth: `${Math.round(crop.width * 2)}px` } });
         stage.style.width = `${(W / crop.width) * 100}%`;
         stage.style.transform = `translate(${(-crop.x / W) * 100}%, ${(-crop.y / H) * 100}%)`;
         wrapEl.replaceChildren(frame);
