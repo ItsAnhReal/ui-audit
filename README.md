@@ -84,21 +84,23 @@ The server listens on 127.0.0.1 only, answers only to `127.0.0.1` and `localhost
 
 | Check | Severity | Meaning |
 |---|---|---|
-| `horizontal-overflow` | P1 | The page scrolls sideways; reports the top-most element that sticks out |
-| `offscreen-control` / `offscreen-content` | P1 / P2 | A control or text is cut off at the viewport edge |
+| `horizontal-overflow` | P1 | The page scrolls sideways; reports the top-most element that sticks out, or the grid whose columns are wider than the grid itself |
+| `offscreen-control` / `offscreen-content` | P1 / P2 | A control or text is cut off at the viewport edge; not reported again when it is the same element (or grid) as a `horizontal-overflow` |
 | `clipped-content` | P2 | A box with hidden overflow cuts into the letters of its text (lost line spacing alone does not count; ellipsis and line-clamp are treated as intentional) |
 | `text-spill` | P3 | Text visibly overflows its box |
 | `overlapping-controls` | P2 | Two interactive controls overlap by ≥20% (menus and dialogs layered on purpose, fixed or sticky bars over scrolling content, buttons inside a text field, small actions laid over a larger row, and wrapped inline links are excluded) |
 | `small-target` | P2 below 768px, else P3 | Pointer target smaller than 24×24px and closer than the WCAG 2.5.8 spacing exception allows to another target; inline text links excluded |
 | `unnamed-control` | P2 | No accessible name |
-| `console-error`, `failed-resource` | P2 | Runtime errors while loading or entering a state |
+| `console-error`, `failed-resource` | P2 | Runtime errors while loading or entering a state; an error logged while a state opened points at the dialog or menu that opened |
+
+The three overflow checks are rated one step lower when the overflow is 4px or less, and one more step when it only occurs below 360px, the narrowest width most phones in use have. They are grouped as one cause in the report.
 | `semantic-*` | agent-assigned | Findings merged from the agent's review, labelled `origin: agent` |
 
 Deterministic findings are measurements. They can still be intentional; add those selectors to `[checks] ignore_selectors`.
 
 ## States
 
-Besides each route's initial state, `ui-audit` discovers states by clicking disclosure controls only: `aria-expanded`, `aria-haspopup`, tabs, `<details>`, and anything marked `data-ui-audit-state`. Discovery runs at 390 and 1280px, skips anything inside a form, navigating links, submit buttons and controls whose name sounds destructive (delete, pay, logout, …), and keeps a candidate only if the click changes the DOM without changing the URL. Anything else goes in `[[states.custom]]`:
+Besides each route's initial state, `ui-audit` discovers states by clicking disclosure controls only: `aria-expanded`, `aria-haspopup`, tabs, `<details>`, and anything marked `data-ui-audit-state`. Discovery runs at 390 and 1280px, skips anything inside a form, navigating links, submit buttons and controls whose name sounds destructive (delete, pay, logout, …), and keeps a candidate only if the click changes the DOM without changing the URL. A state found at 1280px is opened from the narrowest swept width at which its control is shown. Anything else goes in `[[states.custom]]`:
 
 ```toml
 [[states.custom]]
@@ -140,7 +142,7 @@ ui-audit audit --storage-state .ui-audit/auth.json
 
 ## Pages that measure clean for the wrong reason
 
-A page that is still loading, shows an error or "unavailable" message, or is almost empty has nothing to overflow. Each measured route gets `content.state` in `report.json` (`ok`, `loading`, `error-like` or `thin`); the summary and the viewer list every route that is not `ok`, because zero findings there says nothing about the real page. Give such a route its data or a sign-in and run it again.
+A page that is still loading, shows an error or "unavailable" message, or is almost empty has nothing to overflow. Every page is scrolled through once before it is measured, so sections that fade in on scroll are there; a section that still stays fully transparent marks the route `hidden`. Each measured route gets `content.state` in `report.json` (`ok`, `loading`, `error-like`, `hidden` or `thin`); the summary and the viewer list every route that is not `ok`, because zero findings there says nothing about the real page. Give such a route its data or a sign-in and run it again.
 
 ## Consent banners and setup
 

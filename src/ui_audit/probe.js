@@ -180,7 +180,9 @@
     return "";
   }
 
-  function sourceInfo(el) {
+  // `deep` follows the component tree past the first few components, for an element that a
+  // library renders (a dialog's content) where the app's own file is several layers up.
+  function sourceInfo(el, deep) {
     const components = [];
     const files = [];
     const addFile = (file, line) => {
@@ -191,13 +193,13 @@
       const fiberKey = Object.keys(node).find((k) => k.startsWith("__reactFiber$"));
       if (fiberKey) {
         let fiber = node[fiberKey];
-        for (let hops = 0; fiber && hops < 30; hops++, fiber = fiber.return) {
+        for (let hops = 0; fiber && hops < (deep ? 120 : 30); hops++, fiber = fiber.return) {
           if (fiber._debugSource) addFile(fiber._debugSource.fileName, fiber._debugSource.lineNumber);
-          if (typeof fiber.type === "function") {
+          if (typeof fiber.type === "function" && (!deep || fiber._debugSource)) {
             const name = fiber.type.displayName || fiber.type.name;
             if (name && name.length > 1 && !components.includes(name)) components.push(name);
           }
-          if (components.length >= 3) break;
+          if (deep ? files.length >= 3 : components.length >= 3) break;
         }
         break;
       }
@@ -294,6 +296,25 @@
     };
   }
 
+  // Up to this many pixels past the edge is a nuisance (a page that wiggles sideways), not
+  // lost content, and is rated one step lower.
+  const SMALL_OVERFLOW = 4;
+
+  // The grid whose columns are wider than its own box. Items placed in those columns
+  // overflow because of the column sizes, so the grid is what to report and fix.
+  function overflowingGrid(el) {
+    const parent = el.parentElement;
+    if (!parent || parent === document.body || parent === document.documentElement) return null;
+    const style = getComputedStyle(parent);
+    if (!/grid/.test(style.display) || style.overflowX !== "visible") return null;
+    const tracks = style.gridTemplateColumns.split(/\s+/).map(parseFloat).filter((n) => !isNaN(n));
+    if (!tracks.length) return null;
+    const gap = parseFloat(style.columnGap) || 0;
+    const needed = tracks.reduce((sum, n) => sum + n, 0) + gap * (tracks.length - 1);
+    const box = parent.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
+    return needed > box + 1 ? { node: parent, needed: Math.round(needed), box: Math.round(box) } : null;
+  }
+
   function makeIssue(check, severity, el, message) {
     return { check, severity, selector: cssPath(el), message, rect: rectOf(el), hints: sourceInfo(el) };
   }
@@ -320,7 +341,11 @@
     const scrollWidth = Math.max(document.documentElement.scrollWidth, document.body ? document.body.scrollWidth : 0);
     const pageOverflows = scrollWidth > vw + 1;
     const beyondRight = (el) => el.getBoundingClientRect().right + window.scrollX > vw + 1;
+    // What the overflow check reported; the edge check below does not report the same cause again.
+    const overflowRoots = new Set();
     if (pageOverflows) {
+      const by = scrollWidth - vw;
+      const severity = by > SMALL_OVERFLOW ? "P1" : "P2";
       const culprits = visible.filter((el) => {
         if (!beyondRight(el)) return false;
         if (getComputedStyle(el).position === "fixed") return false;
@@ -330,15 +355,30 @@
       });
       if (culprits.length) {
         for (const el of culprits) {
-          const right = Math.round(el.getBoundingClientRect().right + window.scrollX);
-          push(makeIssue("horizontal-overflow", "P1", el,
-            `Extends to ${right}px in a ${vw}px viewport (page scrolls sideways by ${scrollWidth - vw}px).`));
+          const grid = overflowingGrid(el);
+          const target = grid ? grid.node : el;
+          if (overflowRoots.has(target)) continue;
+          overflowRoots.add(target);
+          if (grid) {
+            push(makeIssue("horizontal-overflow", severity, target,
+              `Grid columns need ${grid.needed}px but the grid is ${grid.box}px wide in a ${vw}px viewport (page scrolls sideways by ${by}px).`));
+          } else {
+            const right = Math.round(el.getBoundingClientRect().right + window.scrollX);
+            push(makeIssue("horizontal-overflow", severity, el,
+              `Extends to ${right}px in a ${vw}px viewport (page scrolls sideways by ${by}px).`));
+          }
         }
       } else {
-        push(makeIssue("horizontal-overflow", "P1", document.documentElement,
+        push(makeIssue("horizontal-overflow", severity, document.documentElement,
           `Page is ${scrollWidth}px wide in a ${vw}px viewport.`));
       }
     }
+    const sameCause = (el) => {
+      for (const root of overflowRoots) {
+        if (root.contains(el) || el.contains(root)) return true;
+      }
+      return false;
+    };
 
     // 2. Content or controls cut off at the viewport edge.
     for (const el of visible) {
@@ -356,11 +396,20 @@
       }
       const interactive = el.matches(INTERACTIVE);
       if (!interactive && !hasOwnText(el) && !el.querySelector(INTERACTIVE)) continue;
+      // A centred row that is too wide sticks out on both sides: the right side is the page
+      // overflow reported above, the left side the same defect.
+      if (sameCause(el)) continue;
       const edge = straddlesLeft ? "left" : "right";
-      if (interactive) {
-        push(makeIssue("offscreen-control", "P1", el, `Control is cut off at the ${edge} edge of a ${vw}px viewport.`));
+      const small = (straddlesLeft ? -r.left : r.right - vw) <= SMALL_OVERFLOW;
+      const grid = overflowingGrid(el);
+      if (grid) {
+        overflowRoots.add(grid.node);
+        push(makeIssue("offscreen-content", small ? "P3" : "P2", grid.node,
+          `Grid columns need ${grid.needed}px but the grid is ${grid.box}px wide; content is cut off at the ${edge} edge of a ${vw}px viewport.`));
+      } else if (interactive) {
+        push(makeIssue("offscreen-control", small ? "P2" : "P1", el, `Control is cut off at the ${edge} edge of a ${vw}px viewport.`));
       } else {
-        push(makeIssue("offscreen-content", "P2", el, `Content is cut off at the ${edge} edge of a ${vw}px viewport.`));
+        push(makeIssue("offscreen-content", small ? "P3" : "P2", el, `Content is cut off at the ${edge} edge of a ${vw}px viewport.`));
       }
     }
 
@@ -572,11 +621,47 @@
     if (busy || skeletons >= 3) return { state: "loading", detail: busy ? "a region is still marked busy" : `${skeletons} skeleton placeholders` };
     const heading = shown("h1,h2,[role=heading]").map((el) => (el.innerText || "").replace(/\s+/g, " ").trim()).find(Boolean) || "";
     if (PROBLEM_HEADING.test(heading)) return { state: "error-like", detail: heading.slice(0, 80) };
+    const hidden = hiddenSections();
+    if (hidden) return { state: "hidden", detail: hidden === 1 ? "1 section stays invisible" : `${hidden} sections stay invisible` };
     const text = (document.body ? document.body.innerText : "").replace(/\s+/g, " ").trim();
     // Little to read and next to nothing to operate. A sign-in form is short too, but it has controls.
     const controls = shown(INTERACTIVE).length;
     if (text.length < 250 && controls < 3) return { state: "thin", detail: `${text.length} characters of text, ${controls} control${controls === 1 ? "" : "s"}` };
     return { state: "ok", detail: "" };
+  }
+
+  // Blocks of text that stay fully transparent after the page was scrolled through: content
+  // that waits for an animation which never ran, so the page measures clean without it.
+  // Stacked slides and other absolutely placed layers fade by design and are left out.
+  function hiddenSections() {
+    let count = 0;
+    const counted = [];
+    for (const el of document.body ? document.body.querySelectorAll("*") : []) {
+      if (counted.some((c) => c.contains(el))) continue;
+      const style = getComputedStyle(el);
+      if (style.opacity !== "0" || style.display === "none" || style.visibility === "hidden") continue;
+      if (style.position === "absolute" || style.position === "fixed" || el.closest("[aria-hidden=true]")) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 120 || r.height < 40) continue;
+      if ((el.innerText || "").replace(/\s+/g, " ").trim().length < 20) continue;
+      const parent = el.parentElement;
+      const twins = parent ? Array.from(parent.children).filter((c) => c !== el && c.className === el.className) : [];
+      if (twins.some((c) => getComputedStyle(c).opacity !== "0")) continue;  // one slide of several
+      counted.push(el);
+      count++;
+    }
+    return count;
+  }
+
+  // The component an opened state brought on screen: the newest dialog, menu or popover, or
+  // else the control that opened it. Errors logged while it opened point there.
+  function layerInfo(trigger) {
+    const layers = Array.from(document.querySelectorAll(LAYER)).filter(isVisible);
+    let el = layers[layers.length - 1] || null;
+    if (!el && trigger) {
+      try { el = document.querySelector(trigger); } catch (e) { el = null; }
+    }
+    return el ? sourceInfo(el, true) : null;
   }
 
   // Identifies what a route renders, independent of its URL, so the audit can
@@ -639,6 +724,6 @@
   }
 
   window.__uiAudit = {
-    probe, breakpoints, stateCandidates, consentDecline, contentState, sourceFiles, domFingerprint, pageFingerprint, isTriggerVisible, annotate, clearAnnotations,
+    probe, breakpoints, stateCandidates, consentDecline, contentState, sourceFiles, domFingerprint, pageFingerprint, isTriggerVisible, layerInfo, annotate, clearAnnotations,
   };
 })();

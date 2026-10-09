@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from dataclasses import asdict, dataclass, field
 
-from . import browser
+from . import browser, viewports
 
 # Discovery runs once at a narrow and once at a wide viewport, because
 # hamburger menus and desktop dropdowns only exist at one of them.
@@ -51,14 +51,36 @@ def open_page(page, cfg, route: str, width: int, height: int):
 
     Setup often only changes the current DOM (closing a promo that is not remembered), so it
     has to run again on every page that is measured, not just once. An action whose target
-    is not there (a promo that stayed closed) is skipped.
+    is not there (a promo that stayed closed) is skipped. Then the page is scrolled through
+    once, so sections that fade in on scroll are there when it is measured.
     """
     response = browser.load(page, cfg.base_url, route, width, height, cfg.settle_ms)
     if cfg.setup:
         for action in cfg.setup:
             _run_action(page, action)
         browser.settle(page, cfg.settle_ms)
+    browser.reveal(page, cfg.settle_ms)
     return response
+
+
+def first_width(page, cfg, state: State, widths: list[int]) -> int | None:
+    """The narrowest of `widths` at which the state's trigger is on screen.
+
+    A state's width range is a guess from the two discovery widths: a menu found at 1280px
+    is tried from 768px up, but its button may only show from 1024px. Starting the state at
+    the first width where its button exists keeps it from being skipped altogether.
+    """
+    if not state.trigger or not widths:
+        return widths[0] if widths else None
+    try:
+        open_page(page, cfg, state.route, widths[0], viewports.height_for(widths[0]))
+        for width in widths:
+            browser.resize(page, width, viewports.height_for(width), 0)
+            if page.evaluate("s => window.__uiAudit.isTriggerVisible(s)", state.trigger):
+                return width
+    except Exception:  # noqa: BLE001 - an unloadable page has no width where the state applies
+        return None
+    return None
 
 
 def apply(page, cfg, state: State, width: int, height: int) -> bool:

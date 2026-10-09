@@ -300,6 +300,8 @@
     [/^Extends to (\d+)px in a (\d+)px viewport \(page scrolls sideways by (\d+)px\)\.$/, "msg.extends", ["right", "vw", "by"]],
     [/^Control is cut off at the (left|right) edge of a (\d+)px viewport\.$/, "msg.controlCut", ["edge", "vw"]],
     [/^Content is cut off at the (left|right) edge of a (\d+)px viewport\.$/, "msg.contentCut", ["edge", "vw"]],
+    [/^Grid columns need (\d+)px but the grid is (\d+)px wide in a (\d+)px viewport \(page scrolls sideways by (\d+)px\)\.$/, "msg.gridExtends", ["needed", "box", "vw", "by"]],
+    [/^Grid columns need (\d+)px but the grid is (\d+)px wide; content is cut off at the (left|right) edge of a (\d+)px viewport\.$/, "msg.gridCut", ["needed", "box", "edge", "vw"]],
     [/^Content is clipped by (\d+)px horizontally: "([^]*)"$/, "msg.clippedX", ["px", "text"]],
     [/^Content is clipped by (\d+)px vertically: "([^]*)"$/, "msg.clippedY", ["px", "text"]],
     [/^Text spills (\d+)px outside its box: "([^]*)"$/, "msg.spill", ["px", "text"]],
@@ -323,6 +325,7 @@
   function contentDetail(detail) {
     let m;
     if ((m = /^(\d+) characters of text, (\d+) controls?$/.exec(detail))) return t("content.thinDetail", { chars: fmt.n(+m[1]), controls: fmt.n(+m[2]) });
+    if ((m = /^(\d+) sections? stays? invisible$/.exec(detail))) return t("content.hiddenDetail", { n: fmt.n(+m[1]) });
     if ((m = /^(\d+) skeleton placeholders$/.exec(detail))) return t("content.skeletons", { n: fmt.n(+m[1]) });
     if (detail === "a region is still marked busy") return t("content.busy");
     return detail;

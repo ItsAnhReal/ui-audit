@@ -50,3 +50,23 @@ def test_groups_fold_one_component_across_routes():
     assert groups[0]["source"] == {"file": "src/Card.tsx", "line": 376} and groups[0]["widths"] == [321, 400]
     assert groups[1]["source"] is None  # a guessed file is not an identity; the element's own classes are
     assert issues[0]["group"] == issues[1]["group"] != issues[2]["group"]
+
+
+def test_an_overflow_only_below_common_phone_widths_is_rated_milder():
+    issues = IssueSet()
+    issues.observe(raw(severity="P1"), "/", "default", 320)
+    issues.observe(raw(severity="P1", selector=".wide"), "/", "default", 320)
+    issues.observe(raw(severity="P1", selector=".wide"), "/", "default", 390)
+    issues.observe(raw("clipped-content", "P2", ".box"), "/", "default", 320)
+    rated = {i["selector"]: i["severity"] for i in issues.all()}
+    assert rated == {".hero": "P2", ".wide": "P1", ".box": "P2"}
+
+
+def test_page_overflow_and_the_cut_off_edge_of_one_element_are_one_group():
+    from ui_audit.issues import assign_groups
+
+    source = [{"file": "src/Tile.tsx", "line": 41, "reasons": ["runtime source"]}]
+    issues = [{"id": f"i{n}", "check": check, "severity": "P2", "route": "/demo", "state": "default",
+               "selector": "div.tile", "message": "m", "widths": [320], "source_candidates": source}
+              for n, check in enumerate(["horizontal-overflow", "offscreen-content", "offscreen-control"])]
+    assert len(assign_groups(issues)) == 1
