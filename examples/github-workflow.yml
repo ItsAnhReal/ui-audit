@@ -19,7 +19,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install "ui-audit @ git+https://github.com/AnhAnAsian/ui-audit" && playwright install --with-deps chromium
+      - run: pip install "ui-audit @ git+https://github.com/ItsAnhReal/ui-audit" && playwright install --with-deps chromium
 
       # ADAPT: install and start your app, then wait until it answers.
       - run: npm ci && (npm run dev -- --port 3000 &) && npx wait-on http://localhost:3000

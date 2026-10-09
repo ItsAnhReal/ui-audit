@@ -23,6 +23,8 @@ ROUTER_PATTERNS = [
 ]
 
 
+# Code files that serve a non-HTML file when their name carries its extension (rss.xml.js).
+ENDPOINT_EXTS = {".js", ".ts", ".mjs", ".mts"}
 FILE_ROUTERS = {"next", "nuxt", "astro", "gatsby", "@remix-run/dev", "vite-plugin-pages", "vike",
                 "unplugin-vue-router", "@react-router/fs-routes", "@tanstack/router-plugin", "@docusaurus/core"}
 CLIENT_ROUTERS = {"react-router", "react-router-dom", "vue-router", "wouter", "@tanstack/react-router",
@@ -161,7 +163,8 @@ def routes_from_source(root: Path, samples: dict[str, str]) -> tuple[list[str], 
                 inner = parts[len(base):-1]
                 if inner and inner[0] == "api":
                     continue
-                if name.startswith("_"):
+                # An endpoint such as rss.xml.js or data.json.ts serves a file, not a page.
+                if name.startswith("_") or ("." in name and suffix in ENDPOINT_EXTS and not name.startswith("[")):
                     continue
                 segments = inner + ([] if name == "index" else [name])
                 record(*_segments_to_route(segments))

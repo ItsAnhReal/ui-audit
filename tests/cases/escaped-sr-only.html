@@ -1,0 +1,11 @@
+<!-- expect: horizontal-overflow=1 -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>case</title><style>
+body { margin: 0; font: 16px/1.5 sans-serif; }
+/* The row scrolls inside its own box, but the screen-reader-only label is positioned against
+   the page, not the row, so the row does not clip it and the page scrolls sideways. */
+.row { display: flex; overflow-x: auto; }
+.card { flex: 0 0 600px; height: 100px; background: #eee; margin-right: 8px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+</style></head><body>
+<div class="row"><div class="card">One</div><div class="card">Two</div><div class="card">Three <span class="sr-only">opens the third card</span></div></div>
+</body></html>

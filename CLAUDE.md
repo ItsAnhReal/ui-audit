@@ -4,7 +4,7 @@ Guidance for Claude Code (and Codex via AGENTS.md) working on this repository.
 
 ## What this is
 
-`ui-audit` — a Python Playwright CLI plus one portable Agent Skill that audits running web apps for responsive defects across routes, UI states and widths, and verifies fixes. Product thesis and roadmap live in the owner's PKM ("Responsive UI Auditor Project"); this file covers the code.
+`ui-audit` — a Python Playwright CLI plus one portable Agent Skill that audits running web apps for responsive defects across routes, UI states and widths, and verifies fixes.
 
 ## Commands
 
