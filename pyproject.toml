@@ -27,9 +27,9 @@ classifiers = [
 dependencies = ["playwright>=1.45"]
 
 [project.urls]
-Homepage = "https://github.com/AnhAnAsian/ui-audit"
-Issues = "https://github.com/AnhAnAsian/ui-audit/issues"
-Changelog = "https://github.com/AnhAnAsian/ui-audit/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/ItsAnhReal/ui-audit"
+Issues = "https://github.com/ItsAnhReal/ui-audit/issues"
+Changelog = "https://github.com/ItsAnhReal/ui-audit/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 diff = ["Pillow>=10"]

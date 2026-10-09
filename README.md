@@ -4,7 +4,7 @@
 
 It is a local CLI, a local app, and one portable Agent Skill shared by Claude Code and Codex. No account, no cloud, MIT licensed.
 
-![The report viewer: a grid that only overflows between 800 and 946 px, found by the width sweep and boxed in the screenshot](docs/report-viewer.png)
+![The report viewer: a grid that only overflows between 800 and 946 px, found by the width sweep and boxed in the screenshot](https://raw.githubusercontent.com/ItsAnhReal/ui-audit/main/docs/report-viewer.png)
 
 ```
 Discover → Sweep → Capture → Diagnose → Map to code → Patch → Targeted rerun → Verify → Full regression
@@ -13,7 +13,7 @@ Discover → Sweep → Capture → Diagnose → Map to code → Patch → Target
 ## Try it in a minute
 
 ```bash
-git clone https://github.com/AnhAnAsian/ui-audit && cd ui-audit
+git clone https://github.com/ItsAnhReal/ui-audit && cd ui-audit
 pip install -e .                 # Python 3.11+
 playwright install chromium
 python3 -m http.server 8765 -d demo &
@@ -33,7 +33,7 @@ Responsive bugs live *between* presets: a grid that overflows from 800 to 946 px
 ## Install
 
 ```bash
-pipx install git+https://github.com/AnhAnAsian/ui-audit   # or: pip install -e . in a checkout; Python 3.11+
+pipx install git+https://github.com/ItsAnhReal/ui-audit   # or: pip install -e . in a checkout; Python 3.11+
 playwright install chromium      # or point --browser-path / UI_AUDIT_BROWSER_PATH at an existing Chromium
 ```
 
