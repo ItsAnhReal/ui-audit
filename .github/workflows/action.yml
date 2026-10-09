@@ -19,7 +19,8 @@ jobs:
         uses: ./
         with:
           url: http://localhost:8765
-          start: python3 -m http.server 8765 -d src/ui_audit/demo
+          # Base commits from before the demo moved into the package still have it at demo/.
+          start: python3 -m http.server 8765 -d "$(test -d src/ui_audit/demo && echo src/ui_audit/demo || echo demo)"
           args: --project-root src/ui_audit/demo --fast
           # The demo's defects are planted, and a pull request that changes a check may change
           # what it finds; this job tests the action, not the demo.
