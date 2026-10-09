@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `ui-audit ui` opens only from the address it prints at start (`http://127.0.0.1:8484/?k=…`, like Jupyter); without the key the page answers 403, so other users on the same machine cannot use the app. Sessions from the app's login are saved only as plain file names next to the runs.
+- App and report: a visible keyboard focus outline everywhere (also in forced-colors mode), named dialogs, errors announced as alerts, a setting to turn off the single-key shortcuts `j`, `k` and `/`, no "open page" link for addresses that are not http(s), and a quoted path in the copied `accept` command.
+
 ## 0.1.0 — first public release
 
 - `ui-audit audit`: route discovery (config, framework conventions, sitemap, crawl), conservative state discovery, a full width sweep with boundary refinement, bounded screenshots, findings grouped by cause, source hints, and a content check for pages that measure clean for the wrong reason.
