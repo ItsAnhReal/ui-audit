@@ -89,6 +89,7 @@ def test_endpoints_that_serve_files_are_not_pages(tmp_path):
     touch(tmp_path, "package.json", '{"dependencies": {"astro": "^5"}}')
     touch(tmp_path, "src/pages/index.astro")
     touch(tmp_path, "src/pages/rss.xml.js")
+    touch(tmp_path, "src/pages/legal.notice.astro")  # a page whose name has a dot
     touch(tmp_path, "src/pages/blog/[...slug].astro")
     found, dynamic = routes_from_source(tmp_path, {})
-    assert found == ["/"] and dynamic == ["/blog/[...slug]"]
+    assert sorted(found) == ["/", "/legal.notice"] and dynamic == ["/blog/[...slug]"]

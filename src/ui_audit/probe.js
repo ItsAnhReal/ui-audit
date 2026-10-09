@@ -287,6 +287,14 @@
     return null;
   }
 
+  // Whether two controls sit in different layers: one in an opened popup and one under it,
+  // or a flyout and the menu it opened from. Two separate popups can still cover each other.
+  function apartLayers(p, q) {
+    if (p === q) return false;
+    if (!p || !q) return true;
+    return p.contains(q) || q.contains(p);
+  }
+
   function pinnedLayer(el) {
     for (let node = el; node && node !== document.documentElement; node = node.parentElement) {
       const position = getComputedStyle(node).position;
@@ -547,7 +555,7 @@
         const ratio = (w * h) / Math.min(ra.width * ra.height, rb.width * rb.height);
         if (ratio < overlapThreshold) continue;
         if (a.closest(LAYER) !== b.closest(LAYER)) continue;
-        if (popups[i] !== popups[j]) continue;
+        if (apartLayers(popups[i], popups[j])) continue;
         const cx = Math.max(ra.left, rb.left) + w / 2, cy = Math.max(ra.top, rb.top) + h / 2;
         if (cx >= 0 && cy >= 0 && cx <= window.innerWidth && cy <= window.innerHeight) {
           const top = document.elementFromPoint(cx, cy);
@@ -570,7 +578,7 @@
       for (let m = 0; m < controls.length; m++) {
         if (m === k || controls[k].contains(controls[m]) || controls[m].contains(controls[k])) continue;
         // A floating panel is not a neighbour of the page under it.
-        if (passesOver(pinned[m], pinned[k]) || popups[m] !== popups[k]) continue;
+        if (passesOver(pinned[m], pinned[k]) || apartLayers(popups[m], popups[k])) continue;
         const other = targets[m];
         if (!other.r.width || !other.r.height) continue;
         if (other.small) {
