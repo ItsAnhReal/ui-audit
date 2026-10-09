@@ -45,7 +45,7 @@ def recording_site(tmp_path):
 @pytest.mark.parametrize("case", [
     "never-click-destructive.html",
     pytest.param("never-click-split-label.html", marks=pytest.mark.xfail(
-        strict=True, reason="probe.js matches unsafe words against the raw name, and <br> makes 'Log\\nout'")),
+        strict=False, reason="fixed by the route-discovery branch, which matches unsafe words across any whitespace; drop this mark once both are merged")),
 ])
 def test_destructive_disclosures_are_never_clicked(recording_site, tmp_path, case):
     url, site, seen = recording_site
