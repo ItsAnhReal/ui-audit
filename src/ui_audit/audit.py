@@ -13,7 +13,8 @@ from .issues import IssueSet, coverage_key, load_accepted, mark_accepted, sweep_
 from .sources import SourceIndex
 
 NOT_APPLICABLE = frozenset({"<state not applicable>"})
-# The sweep waits for running transitions (browser.settle) rather than for a fixed time.
+# The sweep waits for loading fonts and running transitions (browser.settle), and at least two
+# animation frames after each resize, rather than for a fixed time.
 SWEEP_SETTLE_MS = 0
 CANDIDATE_FACTOR = 8
 

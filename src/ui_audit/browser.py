@@ -159,24 +159,31 @@ def load(page, base_url: str, path: str, width: int, height: int, settle_ms: int
     return response
 
 
-# Waits for CSS transitions and animations that are about to end, so nothing is measured
-# mid-flight. Endless ones (spinners, marquees) and anything longer than the cap are not waited for.
-_QUIESCE_JS = """cap => new Promise(resolve => {
-  const deadline = performance.now() + cap;
+# Waits for web fonts that are still loading (a new width can bring in a font of its own), then
+# for CSS transitions and animations that are about to end, so nothing is measured mid-flight
+# or in a fallback font. Endless animations (spinners, marquees) and anything longer than the
+# caps are not waited for. With nothing loading or moving, this costs two animation frames.
+_QUIESCE_JS = """([cap, fontCap]) => new Promise(resolve => {
   const moving = () => document.getAnimations().some(a => {
     if (a.playState !== "running" || !a.effect) return false;
     const end = a.effect.getComputedTiming().endTime;
     return Number.isFinite(end) && end - (a.currentTime || 0) <= cap;
   });
-  const tick = () => (!moving() || performance.now() >= deadline) ? resolve() : requestAnimationFrame(tick);
-  requestAnimationFrame(() => requestAnimationFrame(tick));
+  const fonts = document.fonts && document.fonts.status === "loading"
+    ? Promise.race([document.fonts.ready, new Promise(r => setTimeout(r, fontCap))]) : Promise.resolve();
+  fonts.then(() => {
+    const deadline = performance.now() + cap;
+    const tick = () => (!moving() || performance.now() >= deadline) ? resolve() : requestAnimationFrame(tick);
+    requestAnimationFrame(() => requestAnimationFrame(tick));
+  });
 })"""
 QUIESCE_CAP_MS = 600
+FONTS_CAP_MS = 3000
 
 
 def settle(page, settle_ms: int) -> None:
-    """Let layout, transitions and fonts finish after a change."""
-    page.evaluate(_QUIESCE_JS, QUIESCE_CAP_MS)
+    """Let fonts, layout and transitions finish after a change."""
+    page.evaluate(_QUIESCE_JS, [QUIESCE_CAP_MS, FONTS_CAP_MS])
     if settle_ms:
         page.wait_for_timeout(settle_ms)
 
