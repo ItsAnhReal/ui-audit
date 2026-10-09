@@ -75,7 +75,7 @@ def test_app_runs_an_audit_and_accepts_a_finding(demo_site, tmp_path):
             browser = launch(playwright)
             page = browser.new_page(locale="en-US", viewport={"width": 1280, "height": 900})
             page.on("pageerror", lambda exc: errors.append(str(exc)))
-            page.goto(server.url)
+            page.goto(server.launch_url)
             page.get_by_role("button", name="Start the first audit").click()
             page.get_by_role("button", name="Some pages").click()
             page.locator("#na-routes").fill("/pricing.html")

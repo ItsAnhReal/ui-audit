@@ -80,7 +80,7 @@ The skill (`src/ui_audit/skill/SKILL.md`) tells the agent how to run the loop: b
 ## The app
 
 ```bash
-ui-audit ui                                   # http://127.0.0.1:8484, opens in your browser
+ui-audit ui                                   # http://127.0.0.1:8484/?k=…, opens in your browser
 ui-audit ui --config .ui-audit/shop.toml      # another settings file; --runs DIR, --port N, --no-open
 ```
 
@@ -92,7 +92,7 @@ A local web app for the whole loop, started in your project folder. It lists eve
 - **re-check a fix**: measures just those pages at the edges of where the finding was seen (and one pixel outside them) and says whether it is gone, using the same rule as `verify`.
 - **accept** a finding with a reason (written to `ui-audit.accepted.json`, so later runs keep it), **compare** two runs, open a run's folder, delete old runs.
 
-The server listens on 127.0.0.1 only, answers only to `127.0.0.1` and `localhost` host names, and requires a per-start token for every API call, so other websites cannot reach it. Each audit runs in its own process (`python -m ui_audit.runner`), one at a time.
+The server listens on 127.0.0.1 only, answers only to `127.0.0.1` and `localhost` host names, and requires a per-start token for every API call, so other websites cannot reach it. The page itself opens only from the address printed at start, which carries a secret key (`?k=…`), so other users on the same machine cannot use it either; reopening that address works for as long as the server runs. Each audit runs in its own process (`python -m ui_audit.runner`), one at a time.
 
 ## Checks
 
