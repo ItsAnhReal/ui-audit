@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- The GitHub Action posts the pull request comment from a separate step after the app has stopped; the step that runs `install`, `start` and the audit no longer gets the token. New `comment-file` input and `ui-audit ci --post-comment` for commenting from a `workflow_run` job, which also works for pull requests from forks. The README recommends `persist-credentials: false` and a `concurrency` group.
+- The action installs only Chromium's system libraries when the browser comes from the cache, and caches pip downloads.
+
 ## 0.1.0 — first public release
 
 - `ui-audit audit`: route discovery (config, framework conventions, sitemap, crawl), conservative state discovery, a full width sweep with boundary refinement, bounded screenshots, findings grouped by cause, source hints, and a content check for pages that measure clean for the wrong reason.
