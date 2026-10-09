@@ -202,7 +202,12 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     event("state", path=path, state=state.id, status=record["status"])
                     continue
 
-                first = probe_widths[0]
+                first = states.first_width(page, cfg, state, probe_widths)
+                if first is None:
+                    record["status"] = "skipped: its control is not shown at any width"
+                    state_records.append(record)
+                    event("state", path=path, state=state.id, status=record["status"])
+                    continue
                 runtime.clear()
                 if not states.apply(page, cfg, state, first, viewports.height_for(first)):
                     record["status"] = "skipped: could not be applied"
@@ -211,9 +216,12 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     continue
                 if state.kind != "default":
                     note_sources(path)  # an opened dialog or menu brings its own components
-                    for message in runtime.console_errors:
-                        if message not in baseline_errors:
-                            issue_set.runtime("console-error", path, state.id, message, first)
+                    new_errors = [m for m in runtime.console_errors if m not in baseline_errors]
+                    # The error came with opening this state, so the component that opened is where to look.
+                    layer = (page.evaluate("t => window.__uiAudit.layerInfo(t)", state.trigger)
+                             if new_errors else None)
+                    for message in new_errors:
+                        issue_set.runtime("console-error", path, state.id, message, first, hints=layer)
                     for message in runtime.failed_resources:
                         if message not in baseline_errors:
                             issue_set.runtime("failed-resource", path, state.id, message, first)
@@ -278,8 +286,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
         if record.get("status") == "audited":
             record["sources"] = sorted(s for s in route_sources.get(record["path"], ()) if not s.startswith(("/", "..")))
     for issue in issues:
-        if issue["check"] not in ("console-error", "failed-resource"):
-            issue["source_candidates"] = index.rank(issue.get("hints") or {})
+        issue["source_candidates"] = index.rank(issue.get("hints") or {}, check=issue["check"])
     for capture in captures:
         for issue in issues:
             if issue["route"] == capture["route"] and issue["state"] == capture["state"] and capture["width"] in issue["widths"]:
@@ -327,6 +334,10 @@ def _capture(page, cfg: Config, shots_dir: Path, out_dir: Path, path: str, state
     if width not in results:
         probe(width)
     browser.resize(page, width, height, cfg.settle_ms)
+    if state.kind == "default":
+        # A width the page was not scrolled at can still hold sections waiting to fade in.
+        # An open menu or dialog is left alone: some close when the page scrolls.
+        browser.reveal(page, cfg.settle_ms)
     scroll_width, scroll_height = page.evaluate(
         "() => [document.documentElement.scrollWidth, document.documentElement.scrollHeight]")
     # Include sideways overflow so the evidence shows what sticks out.

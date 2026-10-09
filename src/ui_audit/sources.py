@@ -22,6 +22,14 @@ SOURCE_EXTS = {".tsx", ".jsx", ".ts", ".js", ".mjs", ".vue", ".svelte", ".astro"
 MAX_FILES = 5000
 MAX_BYTES = 500_000
 # Utility classes say little about which file to edit.
+# A class with a size written into it (Tailwind's `grid-cols-[repeat(2,9.75rem)]`, `w-[324px]`)
+# is close to unique: the file that contains it is where that size was set.
+SIZED_CLASS = re.compile(r"\[[^\]]*\d(?:\.\d+)?(?:px|rem|em|ch|vw|vh|%|fr)")
+# Checks about how wide or tall something is, where the file that sets the size matters most.
+SIZE_CHECKS = {"horizontal-overflow", "offscreen-content", "offscreen-control", "clipped-content", "text-spill"}
+# Shared primitives (shadcn's components/ui, a ui/ folder) are rarely where a page's defect is
+# fixed; the file that uses them with these props is.
+PRIMITIVE_DIR = re.compile(r"(?:^|/)ui/[^/]+$")
 UTILITY_CLASS = re.compile(r"^(?:-?[a-z]{1,3}-\d|flex$|grid$|block$|hidden$|relative$|absolute$|w-|h-|p[xytrbl]?-|m[xytrbl]?-|text-|bg-|gap-)")
 
 
@@ -58,7 +66,7 @@ class SourceIndex:
         except (ValueError, OSError):
             return path
 
-    def rank(self, hints: dict, limit: int = 3) -> list[dict]:
+    def rank(self, hints: dict, limit: int = 3, check: str = "") -> list[dict]:
         if not hints:
             return []
         scores: dict[str, dict] = {}
@@ -72,8 +80,11 @@ class SourceIndex:
             if line and not entry["line"]:
                 entry["line"] = line
 
-        for hint in hints.get("files") or []:
-            bump(hint["file"], 10, "runtime source", hint.get("line"))
+        # The element's own JSX comes first, the components around it after; nearer is likelier.
+        for position, hint in enumerate(hints.get("files") or []):
+            points = max(10 - position, 7) - (4 if PRIMITIVE_DIR.search(self.relative(hint["file"])) else 0)
+            bump(hint["file"], points, "runtime source", hint.get("line"))
+        sized = check in SIZE_CHECKS
 
         components = [c for c in hints.get("components") or [] if len(c) > 2]
         classes = [c for c in hints.get("classes") or [] if not UTILITY_CLASS.match(c)]
@@ -83,16 +94,18 @@ class SourceIndex:
         text = text[:40] if len(text) >= 6 else ""
 
         for path, content in self.files():
-            for component in components:
+            # The component that renders the element counts fully; the ones around it (the page,
+            # the layout) contain everything on the page and only count half.
+            for position, component in enumerate(components):
                 if path.stem == component:
-                    bump(path, 6, f"component {component}")
+                    bump(path, 6 if position == 0 else 3, f"component {component}")
                 elif re.search(rf"\b(?:function|const|class)\s+{re.escape(component)}\b", content):
-                    bump(path, 4, f"defines {component}")
+                    bump(path, 4 if position == 0 else 2, f"defines {component}")
             if element_id and re.search(rf"""(?:id\s*=\s*["']{re.escape(element_id)}["']|#{re.escape(element_id)}\b)""", content):
                 bump(path, 4, f"id {element_id}")
             for cls in classes + context:
                 if re.search(rf"(?<![\w-]){re.escape(cls)}(?![\w-])", content):
-                    bump(path, 1, f"class {cls}")
+                    bump(path, 5 if sized and SIZED_CLASS.search(cls) else 1, f"class {cls}")
             if text and text in content:
                 bump(path, 3, "visible text")
 

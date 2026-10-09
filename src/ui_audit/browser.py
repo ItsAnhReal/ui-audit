@@ -169,6 +169,37 @@ def settle(page, settle_ms: int) -> None:
         page.wait_for_timeout(settle_ms)
 
 
+# Scrolls through the page once and back to the top. Sections that fade in when they scroll
+# into view (IntersectionObserver, `whileInView`) stay invisible on a page nobody scrolled, and
+# a full-page screenshot does not scroll, so without this they are measured and shown empty.
+_REVEAL_JS = """async maxSteps => {
+  const frame = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  const pause = () => new Promise(r => setTimeout(r, 60));
+  const step = Math.max(Math.round(window.innerHeight * 0.8), 200);
+  let steps = 0;
+  for (let y = step; steps < maxSteps; y += step, steps++) {
+    const bottom = document.documentElement.scrollHeight - window.innerHeight;
+    if (y - step >= bottom) break;
+    window.scrollTo(0, Math.min(y, bottom));
+    await frame();
+    await pause();
+  }
+  window.scrollTo(0, 0);
+  await frame();
+  return steps;
+}"""
+REVEAL_MAX_STEPS = 40
+
+
+def reveal(page, settle_ms: int) -> None:
+    """Bring in content that only appears once it has been scrolled into view."""
+    try:
+        if page.evaluate(_REVEAL_JS, REVEAL_MAX_STEPS):
+            settle(page, settle_ms)
+    except Exception:  # noqa: BLE001 - a page that navigates while scrolling is measured as it is
+        pass
+
+
 def resize(page, width: int, height: int, settle_ms: int) -> None:
     page.set_viewport_size({"width": width, "height": height})
     settle(page, settle_ms)

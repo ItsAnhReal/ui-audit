@@ -53,6 +53,8 @@
     "compare.title": "Compare runs",
 
     "content.error-like": "Error screen",
+    "content.hidden": "Partly invisible",
+    "content.hiddenDetail": "sections that stay invisible: {n}",
     "content.loading": "Still loading",
     "content.busy": "a region is still marked busy",
     "content.skeletons": "{n} skeleton placeholders",
@@ -288,7 +290,7 @@
     "notice.doubtful.one": "{n} page looks doubtful.",
     "notice.doubtful.many": "{n} pages look doubtful.",
     "notice.doubtful.show": "Which ones?",
-    "notice.doubtful.text": "While these were measured they were still loading, showed an error or were nearly empty, so a clean result there means little.",
+    "notice.doubtful.text": "While these were measured they were still loading, showed an error, kept sections invisible or were nearly empty, so a clean result there means little.",
     "notice.verify": "Compared with {name}:",
     "notice.verify.counts": "{fixed} fixed, {introduced} new, {persistent} still there.",
 
@@ -366,6 +368,8 @@
     "msg.extends": "Reaches {right} px in a {vw} px viewport, so the page scrolls sideways by {by} px.",
     "msg.controlCut": "Control is cut off at the {edge} edge of a {vw} px viewport.",
     "msg.contentCut": "Content is cut off at the {edge} edge of a {vw} px viewport.",
+    "msg.gridExtends": "The grid's columns need {needed} px but the grid is {box} px wide in a {vw} px viewport, so the page scrolls sideways by {by} px.",
+    "msg.gridCut": "The grid's columns need {needed} px but the grid is {box} px wide, so content is cut off at the {edge} edge of a {vw} px viewport.",
     "msg.edge.left": "left",
     "msg.edge.right": "right",
     "msg.clippedX": "Content is clipped by {px} px horizontally: “{text}”",
@@ -548,6 +552,8 @@
     "compare.title": "Läufe vergleichen",
 
     "content.error-like": "Fehlerseite",
+    "content.hidden": "Teilweise unsichtbar",
+    "content.hiddenDetail": "unsichtbar gebliebene Abschnitte: {n}",
     "content.loading": "Lädt noch",
     "content.busy": "ein Bereich ist noch als beschäftigt markiert",
     "content.skeletons": "{n} Skeleton-Platzhalter",
@@ -783,7 +789,7 @@
     "notice.doubtful.one": "{n} Seite ist fraglich.",
     "notice.doubtful.many": "{n} Seiten sind fraglich.",
     "notice.doubtful.show": "Welche?",
-    "notice.doubtful.text": "Beim Messen luden diese Seiten noch, zeigten einen Fehler oder waren fast leer. Ein sauberes Ergebnis sagt dort wenig.",
+    "notice.doubtful.text": "Beim Messen luden diese Seiten noch, zeigten einen Fehler, ließen Abschnitte unsichtbar oder waren fast leer. Ein sauberes Ergebnis sagt dort wenig.",
     "notice.verify": "Verglichen mit {name}:",
     "notice.verify.counts": "{fixed} behoben, {introduced} neu, {persistent} noch offen.",
 
@@ -861,6 +867,8 @@
     "msg.extends": "Reicht bis {right} px bei {vw} px Fensterbreite, die Seite scrollt dadurch {by} px seitlich.",
     "msg.controlCut": "Bedienelement wird bei {vw} px Fensterbreite am {edge} Rand abgeschnitten.",
     "msg.contentCut": "Inhalt wird bei {vw} px Fensterbreite am {edge} Rand abgeschnitten.",
+    "msg.gridExtends": "Die Spalten des Rasters brauchen {needed} px, das Raster ist aber nur {box} px breit (bei {vw} px Fensterbreite). Die Seite scrollt dadurch {by} px seitlich.",
+    "msg.gridCut": "Die Spalten des Rasters brauchen {needed} px, das Raster ist aber nur {box} px breit. Bei {vw} px Fensterbreite wird Inhalt am {edge} Rand abgeschnitten.",
     "msg.edge.left": "linken",
     "msg.edge.right": "rechten",
     "msg.clippedX": "Inhalt ist horizontal um {px} px abgeschnitten: „{text}“",

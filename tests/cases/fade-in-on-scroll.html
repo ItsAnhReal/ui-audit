@@ -1,0 +1,18 @@
+<!-- expect: clipped-content=1 -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>case</title><style>
+/* A section below the fold fades in once scrolled into view, and has a real clip. An audit that
+   does not scroll measures it as invisible and calls the page clean. */
+body { margin: 0; padding: 24px; font: 16px/1.5 sans-serif; }
+.spacer { height: 2400px; }
+.reveal { opacity: 0; transition: opacity .2s; }
+.reveal.shown { opacity: 1; }
+.reveal p { width: 200px; height: 30px; overflow: hidden; }
+</style></head><body>
+<div class="spacer">Scroll down</div>
+<section class="reveal"><p>This sentence is far too long to fit into a box that is only one line high and clips it.</p></section>
+<script>
+new IntersectionObserver((entries, observer) => entries.forEach((e) => {
+  if (e.isIntersecting) { e.target.classList.add("shown"); observer.unobserve(e.target); }
+})).observe(document.querySelector(".reveal"));
+</script>
+</body></html>

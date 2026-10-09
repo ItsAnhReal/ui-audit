@@ -29,6 +29,13 @@ DETERMINISTIC_CHECKS = {
 }
 
 
+# One overflow shows up as the page scrolling sideways and as content cut off at an edge.
+OVERFLOW_CHECKS = {"horizontal-overflow", "offscreen-content", "offscreen-control"}
+# The narrowest width most phones in use have. An overflow that only exists below it hits few
+# people and is rated one step lower.
+COMMON_MIN_WIDTH = 360
+
+
 def signature(check: str, route: str, state: str, selector: str) -> str:
     return f"{check}|{route}|{state}|{selector}"
 
@@ -41,11 +48,23 @@ def worst(a: str, b: str) -> str:
     return a if SEVERITY_ORDER.get(a, 9) <= SEVERITY_ORDER.get(b, 9) else b
 
 
+def milder(severity: str) -> str:
+    return {"P1": "P2", "P2": "P3"}.get(severity, severity)
+
+
+def rated(check: str, measured: str, widths: list[int]) -> str:
+    """The severity to report for what the probe measured across `widths`."""
+    if check in OVERFLOW_CHECKS and widths and max(widths) < COMMON_MIN_WIDTH:
+        return milder(measured)
+    return measured
+
+
 class IssueSet:
     """Accumulates observations into aggregated issues."""
 
     def __init__(self) -> None:
         self._issues: dict[str, dict] = {}
+        self._measured: dict[str, str] = {}
 
     def observe(self, raw: dict, route: str, state: str, width: int) -> dict:
         sig = signature(raw["check"], route, state, raw["selector"])
@@ -69,17 +88,18 @@ class IssueSet:
                 "also_in_states": [],
             }
             self._issues[sig] = issue
-        issue["severity"] = worst(issue["severity"], raw["severity"])
+        measured = self._measured[sig] = worst(self._measured.get(sig, raw["severity"]), raw["severity"])
         if width not in issue["widths"]:
             issue["widths"].append(width)
             issue["widths"].sort()
+        issue["severity"] = rated(issue["check"], measured, issue["widths"])
         if raw.get("rect") and str(width) not in issue["rects"]:
             issue["rects"][str(width)] = raw["rect"]
         return issue
 
-    def runtime(self, check: str, route: str, state: str, detail: str, width: int) -> dict:
+    def runtime(self, check: str, route: str, state: str, detail: str, width: int, hints: dict | None = None) -> dict:
         severity = "P2"
-        raw = {"check": check, "severity": severity, "selector": detail[:120], "message": detail}
+        raw = {"check": check, "severity": severity, "selector": detail[:120], "message": detail, "hints": hints}
         return self.observe(raw, route, state, width)
 
     def all(self) -> list[dict]:
@@ -106,6 +126,8 @@ def _group_key(issue: dict) -> tuple[str, dict | None]:
     the element's own tag and classes are the next best thing.
     """
     check = issue["check"]
+    if check in OVERFLOW_CHECKS:
+        check = "overflow"
     if check in ("console-error", "failed-resource"):
         return f"{check}|{issue['message'].split('?')[0][:160]}", None
     top = (issue.get("source_candidates") or [None])[0]
