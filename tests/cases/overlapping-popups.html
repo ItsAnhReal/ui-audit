@@ -1,0 +1,18 @@
+<!-- expect: overlapping-controls=1 -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>case</title><style>
+body { margin: 0; padding: 24px; font: 16px/1.5 sans-serif; }
+/* Two menus left open at once, the second laid over the first: each makes the other unusable. */
+.bar { display: flex; gap: 8px; }
+.dropdown { position: relative; }
+.dropdown button { height: 32px; }
+.menu { position: absolute; top: 100%; left: 0; z-index: 10; margin: 0; padding: 0; list-style: none; background: #fff; border: 1px solid #ccc; width: 200px; }
+.menu a { display: block; height: 40px; padding: 0 12px; line-height: 40px; }
+#m2 { left: -60px; top: calc(100% + 8px); z-index: 11; }
+</style></head><body>
+<div class="bar">
+  <div class="dropdown"><button aria-expanded="true" aria-controls="m1">Products</button>
+    <ul class="menu" id="m1"><li><a href="#a">Analytics</a></li></ul></div>
+  <div class="dropdown"><button aria-expanded="true" aria-controls="m2">Account</button>
+    <ul class="menu" id="m2"><li><a href="#b">Profile</a></li></ul></div>
+</div>
+</body></html>

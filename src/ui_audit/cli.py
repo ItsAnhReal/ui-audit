@@ -434,6 +434,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--scope", choices=["project", "user"], default="project")
     p.add_argument("--project-root")
     p.set_defaults(func=cmd_install_skill)
+
+    from .ci import add_parser as add_ci_parser
+
+    add_ci_parser(sub)
     return parser
 
 

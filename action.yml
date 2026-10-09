@@ -1,0 +1,165 @@
+name: ui-audit
+description: Audit a pull request's web app for responsive layout bugs across routes, UI states and widths, and comment what it introduced.
+author: ItsAnhReal
+branding:
+  icon: maximize
+  color: blue
+
+inputs:
+  url:
+    description: Where the app answers once it runs, e.g. http://localhost:3000.
+    required: true
+  start:
+    description: >-
+      Shell command that starts the app and keeps running (e.g. `npm run dev -- --port 3000`). It runs in the
+      background, once per checkout, and is stopped after each audit. Leave empty if the app already runs; then
+      nothing is compared with the base branch.
+    required: false
+    default: ""
+  install:
+    description: Shell command run before `start` in each checkout, e.g. `npm ci`.
+    required: false
+    default: ""
+  working-directory:
+    description: Where the app lives in the repository.
+    required: false
+    default: "."
+  compare:
+    description: >-
+      `base` audits the pull request's base commit too and reports what this change introduced and fixed; `none`
+      reports every finding; or a folder holding a committed report.json to compare with. `auto` is `base` on pull
+      requests when `start` is set, otherwise `none`.
+    required: false
+    default: auto
+  changed-only:
+    description: "With `compare: base`, audit only the routes that render a file the pull request changed."
+    required: false
+    default: "false"
+  fail-on:
+    description: >-
+      `new` fails the job when the change introduces a P1 or P2 finding; `P1`, `P2` or `P3` fail on any open finding
+      at or above that level; `never` only reports.
+    required: false
+    default: new
+  args:
+    description: Extra arguments for `ui-audit audit`, e.g. `--fast --route / --route /pricing`.
+    required: false
+    default: ""
+  comment:
+    description: "Post the result as a pull request comment and update it on later pushes (needs `pull-requests: write`)."
+    required: false
+    default: "true"
+  wait-timeout:
+    description: Seconds to wait for the app to answer after `start`.
+    required: false
+    default: "180"
+  artifact-name:
+    description: Name of the uploaded artifact with both reports and their screenshots. Empty skips the upload.
+    required: false
+    default: ui-audit-report
+  github-token:
+    description: Token used for the pull request comment.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  p1:
+    description: Open P1 findings in this change.
+    value: ${{ steps.audit.outputs.p1 }}
+  p2:
+    description: Open P2 findings in this change.
+    value: ${{ steps.audit.outputs.p2 }}
+  p3:
+    description: Open P3 findings in this change.
+    value: ${{ steps.audit.outputs.p3 }}
+  introduced:
+    description: Findings this change introduced (empty when nothing was compared).
+    value: ${{ steps.audit.outputs.introduced }}
+  fixed:
+    description: Findings this change fixed (empty when nothing was compared).
+    value: ${{ steps.audit.outputs.fixed }}
+  blocking:
+    description: "`true` when `fail-on` failed the job."
+    value: ${{ steps.audit.outputs.blocking }}
+  report-dir:
+    description: Folder with this change's report.json and index.html.
+    value: ${{ steps.audit.outputs.report-dir }}
+  summary-file:
+    description: The Markdown summary that went to the job page and the comment.
+    value: ${{ steps.audit.outputs.summary-file }}
+
+runs:
+  using: composite
+  steps:
+    - id: python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+        update-environment: false
+
+    # ui-audit runs from its own virtual environment, at the version of this action.
+    - id: install
+      shell: bash
+      env:
+        PYTHON: ${{ steps.python.outputs.python-path }}
+      run: |
+        "$PYTHON" -m venv "$RUNNER_TEMP/ui-audit-venv"
+        "$RUNNER_TEMP/ui-audit-venv/bin/pip" install --quiet --disable-pip-version-check "$GITHUB_ACTION_PATH"
+        echo "bin=$RUNNER_TEMP/ui-audit-venv/bin" >> "$GITHUB_OUTPUT"
+        echo "playwright=$("$RUNNER_TEMP/ui-audit-venv/bin/python" -c 'from importlib.metadata import version; print(version("playwright"))')" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/ms-playwright
+        key: ui-audit-chromium-${{ runner.os }}-${{ runner.arch }}-${{ steps.install.outputs.playwright }}
+
+    - shell: bash
+      run: |
+        "${{ steps.install.outputs.bin }}/playwright" install --with-deps chromium
+
+    - id: audit
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        UI_AUDIT_GITHUB_TOKEN: ${{ inputs.github-token }}
+        UI_AUDIT_ARTIFACT: ${{ inputs.artifact-name }}
+        INPUT_URL: ${{ inputs.url }}
+        INPUT_START: ${{ inputs.start }}
+        INPUT_INSTALL: ${{ inputs.install }}
+        INPUT_COMPARE: ${{ inputs.compare }}
+        INPUT_CHANGED_ONLY: ${{ inputs.changed-only }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_ARGS: ${{ inputs.args }}
+        INPUT_COMMENT: ${{ inputs.comment }}
+        INPUT_WAIT_TIMEOUT: ${{ inputs.wait-timeout }}
+      run: |
+        set +e
+        command=("${{ steps.install.outputs.bin }}/ui-audit" ci "$INPUT_URL" --compare "$INPUT_COMPARE"
+                 --fail-on "$INPUT_FAIL_ON" --wait-timeout "$INPUT_WAIT_TIMEOUT" --output "$RUNNER_TEMP/ui-audit")
+        [ -n "$INPUT_START" ] && command+=(--start "$INPUT_START")
+        [ -n "$INPUT_INSTALL" ] && command+=(--install "$INPUT_INSTALL")
+        [ -n "$INPUT_ARGS" ] && command+=(--args "$INPUT_ARGS")
+        [ "$INPUT_CHANGED_ONLY" = "true" ] && command+=(--changed-only)
+        [ "$INPUT_COMMENT" = "true" ] && command+=(--comment)
+        "${command[@]}"
+        echo "exit-code=$?" >> "$GITHUB_OUTPUT"
+
+    - if: always() && inputs.artifact-name != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ runner.temp }}/ui-audit
+        if-no-files-found: ignore
+
+    - if: steps.audit.outputs.exit-code != '0'
+      shell: bash
+      env:
+        EXIT_CODE: ${{ steps.audit.outputs.exit-code }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        if [ "$EXIT_CODE" = "1" ]; then
+          echo "::error::ui-audit found responsive problems at the fail-on level ($INPUT_FAIL_ON); see the job summary."
+        else
+          echo "::error::ui-audit could not finish the audit; see the log of the audit step."
+        fi
+        exit 1

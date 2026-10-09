@@ -2,11 +2,25 @@
 
 **Give your AI coding agent eyes.** `ui-audit` drives Chromium through every route and safe UI state of a running web app, sweeps the whole width range, measures layout defects, takes a bounded set of annotated screenshots, points at the likely source files, and verifies fixes against a baseline.
 
-It is a local CLI plus one portable Agent Skill shared by Claude Code and Codex. No account, no cloud.
+It is a local CLI, a local app, and one portable Agent Skill shared by Claude Code and Codex. No account, no cloud, MIT licensed.
+
+![The report viewer: a grid that only overflows between 800 and 946 px, found by the width sweep and boxed in the screenshot](https://raw.githubusercontent.com/ItsAnhReal/ui-audit/main/docs/report-viewer.png)
 
 ```
 Discover → Sweep → Capture → Diagnose → Map to code → Patch → Targeted rerun → Verify → Full regression
 ```
+
+## Try it in a minute
+
+```bash
+git clone https://github.com/ItsAnhReal/ui-audit && cd ui-audit
+pip install -e .                 # Python 3.11+
+playwright install chromium
+python3 -m http.server 8765 -d demo &
+ui-audit audit http://localhost:8765 --project-root demo --open
+```
+
+The demo is a small site with planted defects. The one in the screenshot above is the point: four fixed columns that overflow only between 800 and 946 px, invisible at every common device preset.
 
 ## Why not just screenshot ten device sizes?
 
@@ -19,7 +33,7 @@ Responsive bugs live *between* presets: a grid that overflows from 800 to 946 px
 ## Install
 
 ```bash
-pip install -e ".[dev]"          # from a checkout; Python 3.11+
+pipx install git+https://github.com/ItsAnhReal/ui-audit   # or: pip install -e . in a checkout; Python 3.11+
 playwright install chromium      # or point --browser-path / UI_AUDIT_BROWSER_PATH at an existing Chromium
 ```
 
@@ -86,15 +100,15 @@ The server listens on 127.0.0.1 only, answers only to `127.0.0.1` and `localhost
 |---|---|---|
 | `horizontal-overflow` | P1 | The page scrolls sideways; reports the top-most element that sticks out, or the grid whose columns are wider than the grid itself |
 | `offscreen-control` / `offscreen-content` | P1 / P2 | A control or text is cut off at the viewport edge; not reported again when it is the same element (or grid) as a `horizontal-overflow` |
-| `clipped-content` | P2 | A box with hidden overflow cuts into the letters of its text (lost line spacing alone does not count; ellipsis and line-clamp are treated as intentional) |
+| `clipped-content` | P2 | A box with hidden overflow cuts into the letters of its text (lost line spacing alone does not count; ellipsis and line-clamp are treated as intentional, and so are whole slides or drawer panels parked beside the visible one) |
 | `text-spill` | P3 | Text visibly overflows its box |
-| `overlapping-controls` | P2 | Two interactive controls overlap by ≥20% (menus and dialogs layered on purpose, fixed or sticky bars over scrolling content, buttons inside a text field, small actions laid over a larger row, and wrapped inline links are excluded) |
+| `overlapping-controls` | P2 | Two interactive controls overlap by ≥20% (menus and dialogs layered on purpose, including an opened menu next to its expanded button, fixed or sticky bars over scrolling content, buttons inside a text field, small actions laid over a larger row, and wrapped inline links are excluded) |
 | `small-target` | P2 below 768px, else P3 | Pointer target smaller than 24×24px and closer than the WCAG 2.5.8 spacing exception allows to another target; inline text links excluded |
 | `unnamed-control` | P2 | No accessible name |
 | `console-error`, `failed-resource` | P2 | Runtime errors while loading or entering a state; an error logged while a state opened points at the dialog or menu that opened |
+| `semantic-*` | agent-assigned | Findings merged from the agent's review, labelled `origin: agent` |
 
 The three overflow checks are rated one step lower when the overflow is 4px or less, and one more step when it only occurs below 360px, the narrowest width most phones in use have. They are grouped as one cause in the report.
-| `semantic-*` | agent-assigned | Findings merged from the agent's review, labelled `origin: agent` |
 
 Deterministic findings are measurements. They can still be intentional; add those selectors to `[checks] ignore_selectors`.
 
@@ -129,7 +143,55 @@ Some findings are intentional. `ui-audit accept <report folder> <issue or group 
 
 ## In CI
 
-[`examples/github-workflow.yml`](examples/github-workflow.yml) audits the routes a pull request touches and comments the comparison with the base branch. It is a starting point: starting your app and keeping a baseline report are yours to adapt.
+The repository is also a GitHub Action. On every pull request it starts your app twice, once from the base commit and once from the pull request, audits both, and comments what the change introduced and fixed. The job fails when a new P1 or P2 finding appears.
+
+```yaml
+# .github/workflows/ui-audit.yml
+name: ui-audit
+on: pull_request
+
+jobs:
+  ui-audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write   # for the comment
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: ItsAnhReal/ui-audit@main
+        with:
+          url: http://localhost:3000
+          install: npm ci
+          start: npm run dev -- --port 3000
+          args: --fast
+```
+
+`install` and `start` run in each checkout; `start` stays in the background and is stopped after each audit, so both runs use the same port. The token that posts the comment is kept away from `install`, `start` and the audit, which run the pull request's code. The comment is updated on later pushes rather than repeated, the job summary carries the same text, and both reports with their screenshots are uploaded as the `ui-audit-report` artifact (open `head/index.html`).
+
+| Input | Default | |
+|---|---|---|
+| `url` | required | where the app answers once it runs |
+| `start` | | command that starts the app; without it the app must already run and nothing is compared |
+| `install` | | command run before `start` in each checkout, e.g. `npm ci` |
+| `working-directory` | `.` | where the app lives in the repository |
+| `compare` | `auto` | `base`, `none`, or a folder with a committed `report.json`; `auto` is `base` on pull requests with a `start` command |
+| `changed-only` | `false` | audit only routes that render a changed file (with `compare: base`) |
+| `fail-on` | `new` | `new` (a P1 or P2 introduced), `P1`/`P2`/`P3` (any open finding at that level), or `never`; unless `never`, a base commit that cannot be audited fails the job too |
+| `args` | | more `ui-audit audit` options, e.g. `--fast --route / --route /pricing` |
+| `comment` | `true` | comment on the pull request (pull requests from forks get a read-only token; the job summary still works) |
+
+Outputs: `p1`, `p2`, `p3`, `introduced`, `fixed`, `blocking`, `report-dir`, `summary-file`. Pin the action to a commit SHA if you want the same checks on every run.
+
+The action is a thin wrapper around `ui-audit ci`, which works the same way in any other CI system:
+
+```bash
+ui-audit ci http://localhost:3000 --install "npm ci" --start "npm run dev -- --port 3000" --base-ref origin/main --args "--fast"
+```
+
+It exits 1 when `--fail-on` is met and 2 when the app or the audit could not run, and writes both reports and `summary.md` to `.ui-audit/ci`.
 
 ## Pages behind a login
 
@@ -175,14 +237,29 @@ python3 -m http.server 8765 -d demo &
 ui-audit audit http://localhost:8765 --project-root demo
 ```
 
+## How it compares
+
+| Tool | What it does | What ui-audit adds |
+|---|---|---|
+| Percy, Chromatic, BackstopJS | Compare screenshots with an approved baseline | Finds defects without a baseline, measures them instead of diffing pixels, and covers widths between presets |
+| Lighthouse, axe | Performance and accessibility rules on one viewport | Layout defects across the whole width range and in opened menus, tabs and dialogs |
+| Polypane, Responsively | Show many viewports side by side for a person to look at | Runs unattended and tells an agent what is broken, where, and in which file |
+| Playwright MCP, Chrome DevTools MCP | Give an agent a browser to drive | A systematic sweep, findings grouped by cause, and `verify` to prove a fix |
+
 ## Development
 
 ```bash
 pip install -e ".[dev]"
-pytest                 # unit tests + end-to-end tests against the demo (≈1 min)
+pytest                 # unit tests + end-to-end tests against the demo (a few minutes)
 pytest -m "not e2e"    # unit tests only
 ```
 
+Guidance for contributors and coding agents is in [`CLAUDE.md`](CLAUDE.md). A finding that is not a defect gets the smallest page reproducing it in `tests/cases/` before the check changes; bug reports with such a page are the most useful kind.
+
 ## Status
 
-Version 0.1.0. Not yet validated on a real application — see the project's definition of done. Known limits: Chromium only; source mapping is weak in production builds; automatic state discovery is intentionally shallow.
+Version 0.1.0, alpha. Tested on two of the author's own apps and on Docusaurus, the Astro blog starter and the Bootstrap examples; [`CHANGELOG.md`](CHANGELOG.md) lists what those runs changed. Known limits: Chromium only; source mapping is weak in production builds; automatic state discovery is intentionally shallow.
+
+## License
+
+[MIT](LICENSE)
