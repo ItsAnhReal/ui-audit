@@ -45,6 +45,8 @@ def _load_config(args):
         cfg, path = from_dict(json.loads(report.read_text(encoding="utf-8"))["config"]), None
         if not getattr(args, "output", None):
             cfg.output = str(Path(like)) + "-again"  # never write over the run it copies
+    elif getattr(args, "defaults_only", False):  # `ui-audit demo` ignores the ui-audit.toml of the folder it runs in
+        cfg, path = from_dict({}), None
     else:
         cfg, path = load(Path(args.config) if getattr(args, "config", None) else None)
     if getattr(args, "base_url", None):
@@ -203,6 +205,52 @@ def cmd_ui(args) -> int:
         return 2
     serve(workspace, args.port, open_browser=not args.no_open)
     return 0
+
+
+DEMO_DIR = Path(__file__).resolve().parent / "demo"
+
+
+def _serve_demo(port: int):
+    """Serve the bundled demo site on 127.0.0.1 in a thread; any free port if `port` is taken."""
+    import functools
+    import http.server
+    import threading
+
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+    handler = functools.partial(Quiet, directory=str(DEMO_DIR))
+    try:
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
+    except OSError:
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, f"http://127.0.0.1:{server.server_address[1]}"
+
+
+def cmd_demo(args) -> int:
+    import shlex
+    import threading
+
+    server, url = _serve_demo(args.port)
+    try:
+        if args.serve_only:
+            print(f"demo site: {url} (press Ctrl+C to stop)")
+            print(f"audit it:  ui-audit audit {url} --project-root {shlex.quote(str(DEMO_DIR))} --output {shlex.quote(args.output)} --open")
+            try:
+                threading.Event().wait()
+            except KeyboardInterrupt:
+                print("\nstopping")
+            return 0
+        print(f"auditing the demo site at {url}; it has planted defects, listed in {DEMO_DIR / 'README.md'}")
+        audit_args = build_parser().parse_args(["audit", "--base-url", url, "--project-root", str(DEMO_DIR),
+                                                "--output", args.output, "--fast"] + ([] if args.no_open else ["--open"]))
+        audit_args.defaults_only = True
+        return cmd_audit(audit_args)
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def _git_changed(project_root: str, ref: str) -> list[str]:
@@ -429,6 +477,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("report_dir", nargs="?", default=".ui-audit/latest")
     p.add_argument("--no-open", action="store_true", help="only rebuild index.html")
     p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser("demo", help="audit the bundled demo site, which has planted defects, and open the report")
+    p.add_argument("--port", type=int, default=8765, help="port on 127.0.0.1 to serve the demo on (default 8765, or any free one)")
+    p.add_argument("--output", default=".ui-audit/demo", help="output directory (default .ui-audit/demo)")
+    p.add_argument("--no-open", action="store_true", help="do not open the report when done")
+    p.add_argument("--serve-only", action="store_true", help="only serve the demo site and print the audit command")
+    p.set_defaults(func=cmd_demo)
 
     p = sub.add_parser("ui", help="open the app: start audits, work through findings and compare runs in the browser")
     p.add_argument("--config", help=f"path to {CONFIG_FILENAME} (default: search upwards)")
