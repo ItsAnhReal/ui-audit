@@ -26,6 +26,7 @@
 
     "chart.aria": "Findings by width, {n} in total",
     "chart.breakpoint": "CSS breakpoint at {w}px",
+    "chart.keys": "Left and right arrows jump to the next width where the findings change, Shift moves 10 px. Enter shows only the findings at that width, Escape shows all again.",
     "chart.title": "Findings by width",
 
     "compare.after": "After",
@@ -83,6 +84,8 @@
     "detail.error": "Error",
     "detail.fit": "Fit",
     "detail.fullscreen": "Full screen",
+    "detail.zoom": "Zoom",
+    "detail.zoom.title": "Switch between a close-up of the marked element and the whole screenshot",
     "detail.hideOthers": "Hide other findings",
     "detail.howToFix": "How to fix:",
     "detail.measured": "Measured",
@@ -525,6 +528,7 @@
 
     "chart.aria": "Befunde nach Breite, insgesamt {n}",
     "chart.breakpoint": "CSS-Breakpoint bei {w} px",
+    "chart.keys": "Pfeil links und rechts springen zur nächsten Breite, an der sich die Befunde ändern, mit Umschalt um 10 px. Eingabe zeigt nur die Befunde bei dieser Breite, Escape wieder alle.",
     "chart.title": "Befunde nach Breite",
 
     "compare.after": "Nachher",
@@ -582,6 +586,8 @@
     "detail.error": "Fehler",
     "detail.fit": "Einpassen",
     "detail.fullscreen": "Vollbild",
+    "detail.zoom": "Zoom",
+    "detail.zoom.title": "Zwischen Nahansicht des markierten Elements und ganzem Screenshot wechseln",
     "detail.hideOthers": "Andere Befunde ausblenden",
     "detail.howToFix": "So behebst du es:",
     "detail.measured": "Gemessen",
