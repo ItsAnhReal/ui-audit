@@ -281,8 +281,8 @@ def cmd_audit(args) -> int:
     print(f"{counts['P1']} P1 · {counts['P2']} P2 · {counts['P3']} P3 across {len(audited)} route(s), "
           f"{len(result['states'])} state(s), {len(result['captures'])} screenshot(s) ({megabytes:.1f} MB), "
           f"{result['stats']['probes']} probes in {result['stats']['seconds']}s")
-    if len(cfg.browsers) > 1:
-        only = [i for i in result["issues"] if not i.get("accepted") and len(i["browsers"]) < len(cfg.browsers)]
+    if len(result["browsers"]) > 1:
+        only = [i for i in result["issues"] if not i.get("accepted") and not set(result["browsers"]) <= set(i["browsers"])]
         if only:
             print(f"{len(only)} finding(s) show up in some browsers only; see browsers[] on each issue")
     groups = len(result.get("groups", []))

@@ -325,12 +325,17 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     finish(record, path, "audited")
                     log(f"  {state.id}: {len(results)} widths probed, {len(plans)} captured")
 
+    # Only browsers that finished count as audited: a finding is "only in" some browsers only
+    # where the others were really measured.
+    audited_browsers = []
     for engine in cfg.browsers:
         if engine == lead:
             audit_in(engine)
+            audited_browsers.append(engine)
             continue
         try:
             audit_in(engine)
+            audited_browsers.append(engine)
         except Exception as exc:  # noqa: BLE001 - the lead browser's findings still stand
             errors.append(f"{browser.LABELS[engine]}: {str(exc).splitlines()[0][:200]}")
             log(f"{browser.LABELS[engine]}: not audited ({str(exc).splitlines()[0][:200]})")
@@ -356,7 +361,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
         "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "base_url": cfg.base_url,
         "locale": cfg.locale,
-        "browsers": cfg.browsers,
+        "browsers": audited_browsers,
         "project_root": str(Path(cfg.project_root).resolve()),
         "output_dir": str(out_dir),
         "config": cfg.to_dict(),

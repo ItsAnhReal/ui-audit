@@ -100,6 +100,7 @@ class IssueSet:
                 # The browsers it showed up in; the signature leaves the browser out, so one
                 # defect seen in several browsers stays one issue.
                 "browsers": [],
+                "widths_by_browser": {},
             }
             self._issues[sig] = issue
         measured = self._measured[sig] = worst(self._measured.get(sig, raw["severity"]), raw["severity"])
@@ -109,6 +110,10 @@ class IssueSet:
         issue["severity"] = rated(issue["check"], measured, issue["widths"])
         if engine not in issue["browsers"]:
             issue["browsers"].append(engine)
+        seen_at = issue["widths_by_browser"].setdefault(engine, [])
+        if width not in seen_at:
+            seen_at.append(width)
+            seen_at.sort()
         key = rect_key(width, engine)
         if raw.get("rect") and key not in issue["rects"]:
             issue["rects"][key] = raw["rect"]

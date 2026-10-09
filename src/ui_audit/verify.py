@@ -19,9 +19,11 @@ def _coverage(report: dict) -> dict[str, set[int]]:
 
 
 def _in_scope(issue: dict, coverage: dict[str, set[int]]) -> bool:
-    """Whether the run looked where the issue was: in every browser it showed up in."""
-    widths = set(issue.get("widths") or [])
+    """Whether the run looked where the issue was: in every browser it showed up in, at a width
+    it showed up at in that browser."""
+    by_browser = issue.get("widths_by_browser") or {}
     for engine in issue.get("browsers") or ["chromium"]:
+        widths = set(by_browser.get(engine) or issue.get("widths") or [])
         probed = coverage.get(coverage_key(issue["route"], issue["state"], engine))
         if not probed or not probed & widths:
             return False
@@ -52,7 +54,7 @@ def compare(baseline: dict, current: dict) -> dict:
 
     def brief(issue: dict) -> dict:
         return {key: issue.get(key) for key in ("id", "severity", "check", "route", "state", "selector", "message", "widths", "origin",
-                                                "browsers")}
+                                                "browsers", "widths_by_browser")}
 
     by_severity = lambda items: sorted(items, key=lambda i: SEVERITY_ORDER.get(i["severity"], 9))  # noqa: E731
     return {

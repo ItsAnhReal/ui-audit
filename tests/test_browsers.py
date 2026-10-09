@@ -29,6 +29,7 @@ def test_one_defect_seen_in_several_browsers_is_one_issue():
     found = {i["selector"]: i for i in issues.all()}
     assert found[".card"]["browsers"] == ["chromium", "webkit"]
     assert found[".card"]["widths"] == [390, 400]
+    assert found[".card"]["widths_by_browser"] == {"chromium": [390], "webkit": [390, 400]}
     assert set(found[".card"]["rects"]) == {"390", "390@webkit", "400@webkit"}
     assert found[".nav"]["browsers"] == ["webkit"]
     assert found[".card"]["signature"] == "horizontal-overflow|/|default|.card"  # unchanged by browsers
@@ -123,3 +124,36 @@ def test_a_defect_in_one_browser_is_marked_as_such(demo_site, tmp_path):
     assert promo and all(i["browsers"] == ["firefox"] for i in promo)
     evidence = {e for i in promo for e in i["evidence"]}
     assert evidence and all("__firefox" in e for e in evidence)
+
+
+def test_verify_looks_at_the_widths_each_browser_showed_the_issue_at():
+    baseline = {"issues": [{**_issue(".x", ["chromium", "webkit"]), "widths": [390, 1280],
+                            "widths_by_browser": {"chromium": [390], "webkit": [1280]}}], "captures": []}
+    swapped = {"issues": [], "captures": [], "coverage": {coverage_key("/", "default"): [1280],
+                                                          coverage_key("/", "default", "webkit"): [390]}}
+    assert compare(baseline, swapped)["fixed"] == []
+    matching = {"issues": [], "captures": [], "coverage": {coverage_key("/", "default"): [390],
+                                                           coverage_key("/", "default", "webkit"): [1280]}}
+    assert [i["selector"] for i in compare(baseline, matching)["fixed"]] == [".x"]
+
+
+def test_a_browser_that_did_not_start_is_not_counted_as_audited(demo_site, tmp_path, monkeypatch):
+    from ui_audit import browser
+
+    real = browser.launch
+
+    def launch(playwright, executable_path="", headless=True, engine="chromium"):
+        if engine != "chromium":
+            raise RuntimeError("Firefox is not installed")
+        return real(playwright, executable_path, headless)
+
+    monkeypatch.setattr(browser, "launch", launch)
+    url, site = demo_site
+    try:
+        report = audit.run(_config(url, site, tmp_path / "run", ["chromium", "firefox"], ["/pricing.html"]),
+                           log=lambda _: None)
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"Chromium unavailable: {exc}")
+    assert report["browsers"] == ["chromium"]
+    assert any(e.startswith("Firefox:") for e in report["errors"])
+    assert report["issues"] and all(i["browsers"] == ["chromium"] for i in report["issues"])

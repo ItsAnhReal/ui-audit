@@ -353,8 +353,8 @@
     return `${capture.width}${unit}` + (model.browsers.length > 1 ? ` · ${browserName(capture.browser || "chromium")}` : "");
   }
   function onlyIn(model, issue) {
-    const seen = issue.browsers || ["chromium"];
-    return model.browsers.length > 1 && seen.length < model.browsers.length ? seen : null;
+    const seen = (issue.browsers || ["chromium"]).filter((b) => model.browsers.includes(b));
+    return model.browsers.length > 1 && seen.length && seen.length < model.browsers.length ? seen : null;
   }
   function capturesFor(model, issue) {
     const seen = issue.browsers || ["chromium"];
