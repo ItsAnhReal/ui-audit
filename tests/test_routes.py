@@ -268,3 +268,11 @@ def test_hash_router_app_under_a_base_path(demo_site, tmp_path):
     status = {r["path"]: r["status"] for r in report["routes"]}
     # Each hash route is its own page, loaded fresh under /app/; the link outside /app/ is not a route.
     assert status == {"/": "audited", "/#/settings": "audited", "/#/about": "audited"}
+
+
+def test_hash_routes_get_their_own_screenshot_names():
+    from ui_audit.audit import _file_slug
+
+    assert _file_slug("/settings") == "settings"
+    assert _file_slug("/#/settings") != _file_slug("/settings")
+    assert _file_slug("/") == "root"

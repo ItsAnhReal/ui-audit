@@ -19,6 +19,10 @@ CANDIDATE_FACTOR = 8
 
 
 def _file_slug(route: str) -> str:
+    # Hash-router routes ("/#/settings") get their own prefix so they don't share files with "/settings".
+    path, hashed, fragment = route.partition("#")
+    if hashed:
+        return f"{_file_slug(path)}--hash-{_file_slug(fragment)}"
     return states.slug(route.strip("/")) if route.strip("/") else "root"
 
 
