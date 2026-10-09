@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
-authors = [{ name = "AnhAnAsian" }]
+authors = [{ name = "ItsAnhReal" }]
 keywords = ["responsive", "layout", "audit", "playwright", "accessibility", "ai-agent", "claude-code", "codex"]
 classifiers = [
     "Development Status :: 3 - Alpha",
