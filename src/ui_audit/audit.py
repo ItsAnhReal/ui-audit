@@ -276,7 +276,8 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     results: dict[int, dict] = {}
                     not_applicable: set[int] = set()
 
-                    def probe(width: int, _state=state, _results=results, _na=not_applicable) -> frozenset[str]:
+                    def probe(width: int, _path=path, _state=state, _results=results,
+                              _na=not_applicable) -> frozenset[str]:
                         nonlocal probe_count
                         browser.resize(page, width, viewports.height_for(width), min(cfg.settle_ms, SWEEP_SETTLE_MS))
                         probe_count += 1
@@ -286,7 +287,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                         result = page.evaluate("o => window.__uiAudit.probe(o)", opts)
                         _results[width] = result
                         for raw in result["issues"]:
-                            issue_set.observe(raw, path, _state.id, width, engine)
+                            issue_set.observe(raw, _path, _state.id, width, engine)
                         return sweep_signature(result)
 
                     try:

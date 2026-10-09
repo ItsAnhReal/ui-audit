@@ -561,16 +561,16 @@ class Api:
                 if not ids or not reason or len(reason) > 500:
                     raise ApiError(400, "give the findings and a reason (at most 500 characters)")
                 try:
-                    added, already, path = report_mod.accept(self.workspace.run_dir(name), ids, reason)
+                    added, already, file = report_mod.accept(self.workspace.run_dir(name), ids, reason)
                 except LookupError as exc:
                     raise ApiError(404, str(exc)) from exc
-                return {"added": added, "already": already, "file": self.workspace.rel(path)}
+                return {"added": added, "already": already, "file": self.workspace.rel(file)}
             case "POST", ["runs", name, "unaccept"]:
                 try:
-                    removed, path = report_mod.unaccept(self.workspace.run_dir(name), _strings(body.get("ids"), "ids", 500))
+                    removed, file = report_mod.unaccept(self.workspace.run_dir(name), _strings(body.get("ids"), "ids", 500))
                 except LookupError as exc:
                     raise ApiError(404, str(exc)) from exc
-                return {"removed": removed, "file": self.workspace.rel(path)}
+                return {"removed": removed, "file": self.workspace.rel(file)}
             case "POST", ["runs", name, "delete"]:
                 return self.delete(name)
             case "POST", ["runs", name, "reveal"]:
