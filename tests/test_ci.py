@@ -123,6 +123,29 @@ def test_app_is_started_waited_for_and_stopped(tmp_path):
     assert not ci._answers(url)
 
 
+def test_a_local_app_is_asked_directly_not_through_a_proxy(tmp_path, monkeypatch):
+    import functools
+    import http.server
+    import threading
+
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(tmp_path))
+    handler.log_message = lambda *a: None  # type: ignore[assignment]
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        # A proxy that is not there, and nothing exempting loopback (macOS system proxies behave alike).
+        for name in ("no_proxy", "NO_PROXY"):
+            monkeypatch.delenv(name, raising=False)
+        for name in ("http_proxy", "HTTP_PROXY"):
+            monkeypatch.setenv(name, f"http://127.0.0.1:{free_port()}")
+        for host in ("127.0.0.1", "localhost"):
+            assert ci._answers(f"http://{host}:{server.server_address[1]}/")
+        assert ci._loopback("::1") and ci._loopback("app.localhost") and not ci._loopback("example.com")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_a_start_command_that_dies_is_reported_with_its_output(tmp_path):
     app = ci.App("echo boom&& exit 3", tmp_path, tmp_path / "app.log")  # sh and cmd.exe alike
     with pytest.raises(ci.CIError, match="exited with code 3") as caught:

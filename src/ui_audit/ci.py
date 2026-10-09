@@ -17,9 +17,11 @@ import subprocess
 import sys
 import tempfile
 import time
+import ipaddress
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 
 from . import report as report_mod
 from . import verify
@@ -34,9 +36,24 @@ class CIError(Exception):
 
 # --- the app under test ------------------------------------------------------
 
-def _answers(url: str) -> bool:
+def _loopback(host: str) -> bool:
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
     try:
-        with urllib.request.urlopen(url, timeout=3) as response:  # noqa: S310 - the app under test
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+# urllib honours proxy environment variables and, on macOS, the system proxy settings, neither of
+# which exempts 127.0.0.1 by default; an app on this machine is asked directly.
+_DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def _answers(url: str) -> bool:
+    opener = _DIRECT if _loopback(urlparse(url).hostname or "") else urllib.request.build_opener()
+    try:
+        with opener.open(url, timeout=3) as response:  # noqa: S310 - the app under test
             return response.status < 500
     except urllib.error.HTTPError as exc:
         return exc.code < 500

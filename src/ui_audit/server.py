@@ -103,7 +103,7 @@ class Workspace:
 
     def rel(self, path: Path) -> str:
         try:
-            return str(path.resolve().relative_to(self.root))
+            return path.resolve().relative_to(self.root).as_posix()
         except ValueError:
             return str(path.resolve())
 
