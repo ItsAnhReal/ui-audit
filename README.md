@@ -13,11 +13,9 @@ Discover → Sweep → Capture → Diagnose → Map to code → Patch → Target
 ## Try it in a minute
 
 ```bash
-git clone https://github.com/ItsAnhReal/ui-audit && cd ui-audit
-pip install -e .                 # Python 3.11+
+pipx install --include-deps ui-audit   # Python 3.11+; until 0.1.0 is on PyPI, see Install
 playwright install chromium
-python3 -m http.server 8765 -d demo &
-ui-audit audit http://localhost:8765 --project-root demo --open
+ui-audit demo                          # serves the bundled demo site, audits it, opens the report
 ```
 
 The demo is a small site with planted defects. The one in the screenshot above is the point: four fixed columns that overflow only between 800 and 946 px, invisible at every common device preset.
@@ -33,9 +31,11 @@ Responsive bugs live *between* presets: a grid that overflows from 800 to 946 px
 ## Install
 
 ```bash
-pipx install git+https://github.com/ItsAnhReal/ui-audit   # or: pip install -e . in a checkout; Python 3.11+
-playwright install chromium      # or point --browser-path / UI_AUDIT_BROWSER_PATH at an existing Chromium
+pipx install --include-deps ui-audit   # from PyPI once 0.1.0 is published; until then: pipx install --include-deps git+https://github.com/ItsAnhReal/ui-audit
+playwright install chromium            # or point --browser-path / UI_AUDIT_BROWSER_PATH at an existing Chromium
 ```
+
+Python 3.11+. `--include-deps` puts Playwright's `playwright` command on your path too; plain `pip install ui-audit` works as well.
 
 ## Use
 
@@ -165,7 +165,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - uses: ItsAnhReal/ui-audit@main
+      - uses: ItsAnhReal/ui-audit@v0
         with:
           url: http://localhost:3000
           install: npm ci
@@ -187,7 +187,7 @@ jobs:
 | `args` | | more `ui-audit audit` options, e.g. `--fast --route / --route /pricing` |
 | `comment` | `true` | comment on the pull request (pull requests from forks get a read-only token; the job summary still works) |
 
-Outputs: `p1`, `p2`, `p3`, `introduced`, `fixed`, `blocking`, `report-dir`, `summary-file`. Pin the action to a commit SHA if you want the same checks on every run.
+Outputs: `p1`, `p2`, `p3`, `introduced`, `fixed`, `blocking`, `report-dir`, `summary-file`. `v0` exists from the first release on and moves to every 0.x release; pin a release tag such as `v0.1.0`, or a commit SHA, if you want the same checks on every run.
 
 The action is a thin wrapper around `ui-audit ci`, which works the same way in any other CI system:
 
@@ -234,11 +234,11 @@ For each issue, development builds give runtime hints (React `_debugSource` and 
 
 ## Demo
 
-`demo/` is a small static site with deliberately planted defects (see `demo/README.md`):
+A small static site with deliberately planted defects ships with the package (they are listed in [`src/ui_audit/demo/README.md`](https://github.com/ItsAnhReal/ui-audit/blob/main/src/ui_audit/demo/README.md)):
 
 ```bash
-python3 -m http.server 8765 -d demo &
-ui-audit audit http://localhost:8765 --project-root demo
+ui-audit demo                 # serve it on 127.0.0.1:8765, audit it into .ui-audit/demo, open the report
+ui-audit demo --serve-only    # only serve it and print the audit command; also --port N, --output DIR, --no-open
 ```
 
 ## How it compares
@@ -250,6 +250,8 @@ ui-audit audit http://localhost:8765 --project-root demo
 | Polypane, Responsively | Show many viewports side by side for a person to look at | Runs unattended and tells an agent what is broken, where, and in which file |
 | Playwright MCP, Chrome DevTools MCP | Give an agent a browser to drive | A systematic sweep, findings grouped by cause, and `verify` to prove a fix |
 
+When not to use it: brand-level visual regression, where every pixel has to match an approved design, is what Percy or Chromatic are for.
+
 ## Development
 
 ```bash
@@ -258,12 +260,12 @@ pytest                 # unit tests + end-to-end tests against the demo (a few m
 pytest -m "not e2e"    # unit tests only
 ```
 
-Guidance for contributors and coding agents is in [`CLAUDE.md`](CLAUDE.md). A finding that is not a defect gets the smallest page reproducing it in `tests/cases/` before the check changes; bug reports with such a page are the most useful kind.
+How to contribute is in [`CONTRIBUTING.md`](https://github.com/ItsAnhReal/ui-audit/blob/main/CONTRIBUTING.md); guidance for coding agents is in [`CLAUDE.md`](https://github.com/ItsAnhReal/ui-audit/blob/main/CLAUDE.md). A finding that is not a defect gets the smallest page reproducing it in `tests/cases/` before the check changes; bug reports with such a page are the most useful kind.
 
 ## Status
 
-Version 0.1.0, alpha. Tested on two of the author's own apps and on Docusaurus, the Astro blog starter and the Bootstrap examples; [`CHANGELOG.md`](CHANGELOG.md) lists what those runs changed. Known limits: Chromium only; source mapping is weak in production builds; automatic state discovery is intentionally shallow.
+Version 0.1.0, alpha. Tested on two of the author's own apps and on Docusaurus, the Astro blog starter and the Bootstrap examples; [`CHANGELOG.md`](https://github.com/ItsAnhReal/ui-audit/blob/main/CHANGELOG.md) lists what those runs changed. Audits run in Chromium, and with `--browsers` also in WebKit and Firefox. Known limits: source mapping is weak in production builds; automatic state discovery is intentionally shallow.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](https://github.com/ItsAnhReal/ui-audit/blob/main/LICENSE)

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `ui-audit demo`: the demo site with planted defects now ships with the package; the command serves it, audits it and opens the report.
+- Installable with `pipx install ui-audit` once 0.1.0 is on PyPI, and the Action gets a `v0` tag that follows every 0.x release.
+
 ## 0.1.0 — first public release
 
 - `ui-audit audit`: route discovery (config, framework conventions, sitemap, crawl), conservative state discovery, a full width sweep with boundary refinement, bounded screenshots, findings grouped by cause, source hints, and a content check for pages that measure clean for the wrong reason.
