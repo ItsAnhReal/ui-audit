@@ -255,13 +255,15 @@
       if (!captures.has(key)) captures.set(key, []);
       captures.get(key).push(capture);
     }
-    for (const list of captures.values()) list.sort((a, b) => a.width - b.width);
+    const browsers = data.browsers || ["chromium"];
+    const engineOrder = (c) => browsers.indexOf(c.browser || "chromium");
+    for (const list of captures.values()) list.sort((a, b) => a.width - b.width || engineOrder(a) - engineOrder(b));
     const states = new Map((data.states || []).map((s) => [s.route + "|" + s.id, s]));
     const viewports = (data.config && data.config.viewports) || {};
     const routes = data.routes || [];
     const audited = routes.filter((r) => (r.status || "audited") === "audited" && r.loaded !== false);
     return {
-      data, issues, byId, groups, captures, states, routes, audited,
+      data, issues, byId, groups, captures, states, routes, audited, browsers,
       name: data.name || "",
       LO: viewports.min_width || 320, HI: Math.max(viewports.max_width || 1920, (viewports.min_width || 320) + 1),
       accepted: issues.filter((i) => i.accepted).length,
@@ -342,11 +344,26 @@
     for (const i of issues) if (!i.accepted) c[i.severity] = (c[i.severity] || 0) + 1;
     return c;
   }
-  function capturesFor(model, issue) { return model.captures.get(issue.route + "|" + issue.state) || []; }
+  // Other browsers than Chromium: their screenshots and boxes carry the browser's name.
+  function browserName(name) {
+    return { chromium: t("browser.chromium"), webkit: t("browser.webkit"), firefox: t("browser.firefox") }[name] || name;
+  }
+  function rectKey(capture) { return !capture.browser || capture.browser === "chromium" ? String(capture.width) : `${capture.width}@${capture.browser}`; }
+  function shotLabel(model, capture, unit = "") {
+    return `${capture.width}${unit}` + (model.browsers.length > 1 ? ` · ${browserName(capture.browser || "chromium")}` : "");
+  }
+  function onlyIn(model, issue) {
+    const seen = (issue.browsers || ["chromium"]).filter((b) => model.browsers.includes(b));
+    return model.browsers.length > 1 && seen.length && seen.length < model.browsers.length ? seen : null;
+  }
+  function capturesFor(model, issue) {
+    const seen = issue.browsers || ["chromium"];
+    return (model.captures.get(issue.route + "|" + issue.state) || []).filter((c) => seen.includes(c.browser || "chromium"));
+  }
   function bestCapture(model, issue) {
     const caps = capturesFor(model, issue);
     if (!caps.length) return null;
-    const boxed = caps.filter((c) => issue.rects && issue.rects[String(c.width)]);
+    const boxed = caps.filter((c) => issue.rects && issue.rects[rectKey(c)]);
     if (boxed.length) return boxed[Math.floor((boxed.length - 1) / 2)];
     const a = lo(issue), b = hi(issue);
     if (a === undefined) return caps[0];
@@ -362,7 +379,7 @@
     const boxes = [];
     for (const issue of model.issues) {
       if (issue.route !== capture.route || issue.state !== capture.state) continue;
-      const rect = issue.rects && issue.rects[String(capture.width)];
+      const rect = issue.rects && issue.rects[rectKey(capture)];
       if (!rect) continue;
       const focus = focusIds ? focusIds.has(issue.id) : !issue.accepted;
       if (!focus && (issue.accepted || !focusIds)) continue;
@@ -1673,6 +1690,7 @@
     const headline = h("div", { class: "headline" }, sev(item.severity, true),
       agent ? badge(t("detail.agent"), "accent", "spark", t("detail.agent.title")) : null,
       first.accepted ? badge(t("detail.acceptedBadge"), "good", "check") : null,
+      onlyIn(model, issue) ? badge(t("detail.onlyIn", { browsers: onlyIn(model, issue).map(browserName).join(", ") }), "accent", "info", t("detail.onlyIn.title")) : null,
       pageCount > 1 ? badge(plural(pageCount, "detail.onPages.one", "detail.onPages.many"), "accent", "layers") : all.length > 1 ? badge(t("detail.places", { n: all.length }), "accent", "layers") : null);
     node.append(h("button", { class: "btn sm ghost back", onClick: hooks.back }, icon("left"), t("detail.back")));
     if (hooks.hidden) {
@@ -1751,7 +1769,7 @@
       return box;
     }
     const chosen = vs.shot[issue.id];
-    let capture = caps.find((c) => c.width === chosen) || bestCapture(model, issue);
+    let capture = caps.find((c) => c.file === chosen) || bestCapture(model, issue);
     const tools = h("div", { class: "shot-tools" });
     const widths = h("div", { class: "widths", role: "group", "aria-label": t("detail.screenshotWidths") });
     const wrapEl = h("div", { class: "stage-wrap" });
@@ -1765,9 +1783,9 @@
 
     const inRange = (c) => lo(issue) !== undefined && c.width >= lo(issue) && c.width <= hi(issue);
     function show() {
-      vs.shot[issue.id] = capture.width;
+      vs.shot[issue.id] = capture.file;
       widths.replaceChildren(...caps.map((c) => h("button", { class: `${inRange(c) ? "hit " : ""}${issue.severity}`, "aria-pressed": String(c === capture), title: inRange(c) ? t("detail.widthHit") : t("detail.widthMiss"),
-        onClick: () => { capture = c; show(); } }, String(c.width))));
+        onClick: () => { capture = c; show(); } }, shotLabel(model, c))));
       widths.querySelector('[aria-pressed="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
       const focus = new Set([issue.id]);
       const boxes = boxesAt(model, capture, focus).filter((b) => !b.other || vs.others);
@@ -1818,7 +1836,7 @@
       note.className = `stage-note${outside ? " out" : ""}`;
       note.replaceChildren(outside ? icon("info") : "", hasBox ? t("detail.boxNote", { w: capture.width, reasons: reasonText(capture.reasons) })
         : issue.origin === "agent" ? t("detail.agentNoBox") : inRange(capture) ? t("detail.noBoxHere", { w: capture.width }) : t("detail.outside", { w: capture.width, range: fmt.range(lo(issue), hi(issue)) }));
-      bigBtn.onclick = () => lightbox(caps.map((c) => ({ src: fileUrl(model, c.file), caption: `${issue.route} · ${stateLabel(model, issue.route, issue.state)} · ${c.width}px`,
+      bigBtn.onclick = () => lightbox(caps.map((c) => ({ src: fileUrl(model, c.file), caption: `${issue.route} · ${stateLabel(model, issue.route, issue.state)} · ${shotLabel(model, c, "px")}`,
         boxes: boxesAt(model, c, focus).filter((b) => !b.other || vs.others) })), caps.indexOf(capture));
     }
     fitBtn.addEventListener("click", () => { vs.fit = !vs.fit; fitBtn.setAttribute("aria-pressed", String(!vs.fit)); show(); });
@@ -2013,16 +2031,17 @@
         const [r, s] = key.split("|");
         if (q && !`${r} ${stateLabel(model, r, s)}`.toLowerCase().includes(q)) continue;
         let caps = model.captures.get(key);
-        const issuesAt = (c) => model.issues.filter((i) => !i.accepted && i.route === c.route && i.state === c.state && (i.widths || []).includes(c.width));
+        const issuesAt = (c) => model.issues.filter((i) => !i.accepted && i.route === c.route && i.state === c.state && (i.widths || []).includes(c.width)
+          && (i.browsers || ["chromium"]).includes(c.browser || "chromium"));
         if (onlyIssues.checked) caps = caps.filter((c) => issuesAt(c).length);
         if (!caps.length) continue;
         shown += caps.length;
-        const items = caps.map((c) => ({ src: fileUrl(model, c.file), caption: `${r} · ${stateLabel(model, r, s)} · ${c.width}px`, boxes: boxesAt(model, c, null) }));
+        const items = caps.map((c) => ({ src: fileUrl(model, c.file), caption: `${r} · ${stateLabel(model, r, s)} · ${shotLabel(model, c, "px")}`, boxes: boxesAt(model, c, null) }));
         gallery.append(h("section", { class: "card" }, h("h3", {}, r, h("span", { text: `${stateLabel(model, r, s)} · ${plural(caps.length, "unit.shots.one", "unit.shots.many")}` })),
           h("div", { class: "thumbs" }, caps.map((c, n) => {
             const found = issuesAt(c);
             return h("button", { class: `thumb ${found.length ? worst(found) : ""}`, "aria-label": t("shots.open", { w: c.width }), onClick: () => lightbox(items, n) },
-              h("img", { src: fileUrl(model, c.file), loading: "lazy", alt: "", decoding: "async", onError: missingImage }), h("b", { text: `${c.width}` }), found.length ? h("i", { text: found.length }) : null);
+              h("img", { src: fileUrl(model, c.file), loading: "lazy", alt: "", decoding: "async", onError: missingImage }), h("b", { text: shotLabel(model, c) }), found.length ? h("i", { text: found.length }) : null);
           }))));
       }
       if (!shown) gallery.append(h("div", { class: "card" }, emptyState("image", t("shots.none"), "")));
@@ -2048,6 +2067,7 @@
         [t("info.took"), fmt.dur(stats.seconds)],
         [t("info.version"), `ui-audit ${data.version || "?"}`],
         [t("info.language"), data.locale || t("info.browserDefault")],
+        [t("info.browsers"), model.browsers.map(browserName).join(", ")],
         [t("info.signedIn"), data.config && data.config.signed_in ? t("info.yes") : t("info.no")],
         data.consent_dismissed ? [t("info.consent"), `“${data.consent_dismissed}”`] : null,
         [t("info.folder"), h("div", { class: "copyable" }, h("code", { text: folder }), h("button", { class: "btn ghost icon sm", "aria-label": t("action.copy"), onClick: () => copy(folder, t("toast.pathCopied")) }, icon("copy")))],

@@ -1,4 +1,4 @@
-"""Browser lifecycle: launching Chromium, loading pages, collecting runtime errors."""
+"""Browser lifecycle: launching Chromium, WebKit or Firefox, loading pages, collecting runtime errors."""
 
 from __future__ import annotations
 
@@ -29,8 +29,19 @@ def _fallback_executables() -> list[str]:
     return found
 
 
-def launch(playwright, executable_path: str = "", headless: bool = True):
-    """Launch Chromium, falling back to any local Chromium build if needed."""
+LABELS = {"chromium": "Chromium", "webkit": "Safari (WebKit)", "firefox": "Firefox"}
+
+
+def launch(playwright, executable_path: str = "", headless: bool = True, engine: str = "chromium"):
+    """Launch a browser. Chromium falls back to any local Chromium build if needed;
+    `executable_path` applies to Chromium only."""
+    if engine != "chromium":
+        try:
+            return getattr(playwright, engine).launch(headless=headless)
+        except Exception as exc:
+            if "Executable doesn't exist" in str(exc):
+                raise RuntimeError(f"{LABELS[engine]} is not installed; run `playwright install {engine}`") from exc
+            raise
     path = executable_path or os.environ.get("UI_AUDIT_BROWSER_PATH", "")
     if path:
         return playwright.chromium.launch(executable_path=path, headless=headless)
@@ -63,7 +74,8 @@ class RuntimeLog:
         if urlparse(url).path == "/favicon.ico":
             return
         # The page cancelled the request itself (it navigated or unmounted); nothing failed.
-        if "ERR_ABORTED" in reason:
+        # Chromium, Firefox and WebKit each word that differently.
+        if any(word in reason for word in ("ERR_ABORTED", "NS_BINDING_ABORTED", "cancelled")):
             return
         self.failed_resources.append(f"{url} ({reason})"[:300])
 
@@ -73,12 +85,12 @@ class RuntimeLog:
 
 
 @contextmanager
-def session(cfg):
+def session(cfg, engine: str = "chromium"):
     """Yield (page, runtime_log) with the probe script installed."""
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as playwright:
-        browser = launch(playwright, cfg.browser_path)
+        browser = launch(playwright, cfg.browser_path, engine=engine)
         context_args = {"viewport": {"width": 1280, "height": 900}}
         if cfg.storage_state:
             context_args["storage_state"] = cfg.storage_state

@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .issues import SEVERITY_ORDER
+from .issues import SEVERITY_ORDER, coverage_key
 
 
 def _coverage(report: dict) -> dict[str, set[int]]:
@@ -19,10 +19,15 @@ def _coverage(report: dict) -> dict[str, set[int]]:
 
 
 def _in_scope(issue: dict, coverage: dict[str, set[int]]) -> bool:
-    probed = coverage.get(f"{issue['route']}|{issue['state']}")
-    if probed is None:
-        return False
-    return bool(probed & set(issue.get("widths") or []))
+    """Whether the run looked where the issue was: in every browser it showed up in, at a width
+    it showed up at in that browser."""
+    by_browser = issue.get("widths_by_browser") or {}
+    for engine in issue.get("browsers") or ["chromium"]:
+        widths = set(by_browser.get(engine) or issue.get("widths") or [])
+        probed = coverage.get(coverage_key(issue["route"], issue["state"], engine))
+        if not probed or not probed & widths:
+            return False
+    return True
 
 
 def compare(baseline: dict, current: dict) -> dict:
@@ -48,7 +53,8 @@ def compare(baseline: dict, current: dict) -> dict:
     introduced = [issue for sig, issue in now.items() if sig not in base]
 
     def brief(issue: dict) -> dict:
-        return {key: issue.get(key) for key in ("id", "severity", "check", "route", "state", "selector", "message", "widths", "origin")}
+        return {key: issue.get(key) for key in ("id", "severity", "check", "route", "state", "selector", "message", "widths", "origin",
+                                                "browsers", "widths_by_browser")}
 
     by_severity = lambda items: sorted(items, key=lambda i: SEVERITY_ORDER.get(i["severity"], 9))  # noqa: E731
     return {
@@ -69,11 +75,12 @@ def pixel_diffs(baseline: dict, current: dict, base_dir: Path, current_dir: Path
         from PIL import Image, ImageChops
     except ImportError:
         return [{"error": "Pillow is not installed; pip install 'ui-audit[diff]'"}]
-    base_caps = {(c["route"], c["state"], c["width"]): c for c in baseline["captures"]}
+    key_of = lambda c: (c["route"], c["state"], c["width"], c.get("browser", "chromium"))  # noqa: E731
+    base_caps = {key_of(c): c for c in baseline["captures"]}
     results = []
     diff_dir = out_dir / "diffs"
     for capture in current["captures"]:
-        key = (capture["route"], capture["state"], capture["width"])
+        key = key_of(capture)
         if key not in base_caps:
             continue
         try:
@@ -88,7 +95,7 @@ def pixel_diffs(baseline: dict, current: dict, base_dir: Path, current_dir: Path
         canvas_b.paste(b)
         diff = ImageChops.difference(canvas_a, canvas_b).convert("L").point(lambda v: 255 if v > 24 else 0)
         changed = sum(diff.histogram()[255:]) / (width * height)
-        entry = {"route": key[0], "state": key[1], "width": key[2], "changed_ratio": round(changed, 5)}
+        entry = {"route": key[0], "state": key[1], "width": key[2], "browser": key[3], "changed_ratio": round(changed, 5)}
         if changed > 0:
             diff_dir.mkdir(parents=True, exist_ok=True)
             name = Path(capture["file"]).name
@@ -112,6 +119,9 @@ def render_markdown(result: dict) -> str:
             for issue in result[key]:
                 widths = issue.get("widths") or []
                 where = f"{widths[0]}–{widths[-1]}px" if len(widths) > 1 else (f"{widths[0]}px" if widths else "")
+                engines = issue.get("browsers") or ["chromium"]
+                if engines != ["chromium"]:
+                    where += f" ({', '.join(engines)})"
                 lines.append(f"- {issue['severity']} `{issue['check']}` {issue['route']} [{issue['state']}] {where} `{issue['selector']}` — {issue['message']}")
     diffs = [d for d in result.get("pixel_diffs", []) if "changed_ratio" in d]
     if diffs:

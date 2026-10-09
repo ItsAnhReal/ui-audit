@@ -137,6 +137,10 @@ A full audit sweeps every route and every opened menu, tab and dialog across the
 
 `--locale de` (or `locale = "de"`) sets the browser language. Apps that follow it render in that language, where longer labels overflow first. Run once per language into separate output directories.
 
+## Browsers
+
+Audits run in Chromium. `--browsers chromium,webkit,firefox` (or `browsers = [...]` in `ui-audit.toml`) also runs them in WebKit, the engine behind Safari, and Firefox; install those once with `playwright install webkit firefox`. The first browser finds the routes and states, the others audit the same ones. A defect seen in several browsers is one finding; each finding lists its `browsers`, and the viewer marks the ones that show up in some browsers only.
+
 ## Accepting a finding
 
 Some findings are intentional. `ui-audit accept <report folder> <issue or group id> --reason "…"` records them in `ui-audit.accepted.json` in the project root (commit it). Accepted findings stay in the report, flagged with the reason, but out of the counts, `--fail-on` and `verify`. The viewer hides them behind an "Accepted" filter and has a button on every finding that copies the command.

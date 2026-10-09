@@ -35,7 +35,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from . import __version__, report as report_mod, verify
-from .config import CONFIG_FILENAME, Config, ConfigError, load
+from .config import CONFIG_FILENAME, Config, ConfigError, load, parse_browsers
 
 RUN_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$")
 STAMP = re.compile(r"-\d{8}-\d{6}(-\d+)?$")
@@ -128,7 +128,8 @@ class Workspace:
                     found[path] = {"path": self.rel(path), "error": str(exc), "default": True}
                 continue  # some other tool's .toml
             found[path] = {"path": self.rel(path), "base_url": cfg.base_url, "default": path == self.config_path,
-                           "storage_state": cfg.storage_state, "locale": cfg.locale, "sweep": cfg.states.sweep}
+                           "storage_state": cfg.storage_state, "locale": cfg.locale, "sweep": cfg.states.sweep,
+                           "browsers": cfg.browsers}
         return list(found.values())
 
     def config_file(self, name: str) -> Path:
@@ -592,7 +593,8 @@ class Api:
         try:
             cfg = ws.config()
             default = {"path": ws.rel(ws.config_path) if ws.config_path else None, "base_url": cfg.base_url,
-                       "storage_state": cfg.storage_state, "locale": cfg.locale, "sweep": cfg.states.sweep}
+                       "storage_state": cfg.storage_state, "locale": cfg.locale, "sweep": cfg.states.sweep,
+                           "browsers": cfg.browsers}
         except (ConfigError, OSError, ValueError) as exc:
             default = {"path": ws.rel(ws.config_path) if ws.config_path else None, "error": str(exc)}
         return {"version": __version__, "project": ws.root.name, "root": str(ws.root), "runs_dir": ws.rel(ws.runs_dir),
@@ -682,6 +684,11 @@ class Api:
             if locale and not LOCALE.match(locale):
                 raise ApiError(400, "language must look like de or fr-FR")
             cfg.locale = locale
+        if "browsers" in body:
+            try:
+                cfg.browsers = parse_browsers(body.get("browsers") or [])
+            except ConfigError as exc:
+                raise ApiError(400, str(exc)) from exc
         if "storage_state" in body:
             cfg.storage_state = ws.session_file(str(body.get("storage_state") or ""))
         if body.get("states") is False:
