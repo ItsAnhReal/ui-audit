@@ -89,18 +89,35 @@
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       const parent = node.parentElement;
       if (!node.nodeValue.trim() || !parent || !isVisible(parent) || clippingAncestor(parent)) continue;
-      if (getComputedStyle(parent).position === "fixed") continue;
+      if (insideFixed(parent)) continue;  // a fixed box never widens the page
       range.selectNodeContents(node);
-      const right = range.getBoundingClientRect().right + window.scrollX;
+      // Text its own box clips (a visually hidden label) reaches only as far as that box.
+      const clipsOwn = getComputedStyle(parent).overflowX !== "visible";
+      const right = (clipsOwn ? parent.getBoundingClientRect() : range.getBoundingClientRect()).right + window.scrollX;
       if (right > vw + 1) return { el: parent, text: node.nodeValue.trim().slice(0, 60), right: Math.round(right) };
     }
     return null;
   }
 
+  function insideFixed(el) {
+    for (let node = el; node && node !== document.documentElement; node = node.parentElement) {
+      if (getComputedStyle(node).position === "fixed") return true;
+    }
+    return false;
+  }
+
+  // The nearest ancestor whose overflow clips el sideways. An absolutely positioned box is
+  // clipped only from its containing block upwards, and a fixed one by none of them: a
+  // visually hidden label inside a scrolling row still widens the page when the row is static.
   function clippingAncestor(el) {
+    let position = getComputedStyle(el).position;
     for (let node = el.parentElement; node && node !== document.body && node !== document.documentElement; node = node.parentElement) {
-      const ox = getComputedStyle(node).overflowX;
-      if (ox !== "visible") return { node, mode: ox };
+      const style = getComputedStyle(node);
+      const transformed = style.transform !== "none" || style.filter !== "none" || /paint|layout|strict|content/.test(style.contain);
+      const containing = transformed || (position === "absolute" && style.position !== "static");
+      if ((position === "absolute" || position === "fixed") && !containing) continue;
+      if (style.overflowX !== "visible") return { node, mode: style.overflowX };
+      position = style.position === "absolute" || style.position === "fixed" ? style.position : "static";
     }
     return null;
   }
@@ -149,12 +166,25 @@
       for (const r of range.getClientRects()) {
         if (!r.width || !r.height) continue;
         if (horizontal) {
-          if (r.left < box.left - 1 || r.right > box.right + 1) return true;
+          if (r.left < box.left - 1 || r.right > box.right + 1) {
+            if (!inParkedPanel(parent, el, box)) return true;
+          }
         } else {
           const slack = Math.max(r.height - fontSize, 0) / 2;  // leading above and below the glyphs
           if (r.top + slack < box.top - 1 || r.bottom - slack > box.bottom + 1) return true;
         }
       }
+    }
+    return false;
+  }
+
+  // A panel as wide as the clipping box, moved sideways as a whole: a carousel slide, or the
+  // second level of a drawer menu waiting beside the first. It is out of view on purpose.
+  function inParkedPanel(node, clipper, box) {
+    for (let up = node; up && up !== clipper; up = up.parentElement) {
+      const r = up.getBoundingClientRect();
+      if (Math.abs(r.width - box.width) <= Math.max(2, box.width * 0.05)
+          && (r.left < box.left - 1 || r.right > box.right + 1)) return true;
     }
     return false;
   }
@@ -244,6 +274,19 @@
   }
 
   // The nearest fixed or sticky ancestor (or the element itself), or null for page content.
+  // The opened menu or popover el sits in, when it has no role saying so: a positioned box
+  // that an expanded control points at (aria-controls) or sits right next to.
+  function openPopup(el) {
+    for (let node = el.parentElement; node && node !== document.body; node = node.parentElement) {
+      const position = getComputedStyle(node).position;
+      if (position !== "absolute" && position !== "fixed") continue;
+      if (node.id && document.querySelector(`[aria-expanded=true][aria-controls~="${CSS.escape(node.id)}"]`)) return node;
+      const siblings = node.parentElement ? Array.from(node.parentElement.children) : [];
+      if (siblings.some((s) => s !== node && s.matches("[aria-expanded=true]"))) return node;
+    }
+    return null;
+  }
+
   function pinnedLayer(el) {
     for (let node = el; node && node !== document.documentElement; node = node.parentElement) {
       const position = getComputedStyle(node).position;
@@ -367,7 +410,8 @@
         if (getComputedStyle(el).position === "fixed") return false;
         if (clippingAncestor(el)) return false;
         const parent = el.parentElement;
-        return !parent || parent === document.body || parent === document.documentElement || !beyondRight(parent);
+        return !parent || parent === document.body || parent === document.documentElement || !beyondRight(parent)
+          || Boolean(clippingAncestor(parent));  // the parent is cut off where el is not
       });
       if (culprits.length) {
         for (const el of culprits) {
@@ -378,6 +422,10 @@
           if (grid) {
             push(makeIssue("horizontal-overflow", severity, target,
               `Grid columns need ${grid.needed}px but the grid is ${grid.box}px wide in a ${vw}px viewport (page scrolls sideways by ${by}px).`));
+          } else if (isScreenReaderOnly(el)) {
+            const right = Math.round(el.getBoundingClientRect().right + window.scrollX);
+            push(makeIssue("horizontal-overflow", severity, el,
+              `Screen-reader-only text "${snippet(el).slice(0, 40)}" sits at ${right}px in a ${vw}px viewport, outside the scrolling box it belongs to (page scrolls sideways by ${by}px); give that box position: relative so it clips the text.`));
           } else {
             const right = Math.round(el.getBoundingClientRect().right + window.scrollX);
             push(makeIssue("horizontal-overflow", severity, el,
@@ -469,6 +517,7 @@
     // Overlap is judged on what is visible: a list scrolled under a footer does not cover it.
     const boxes = controls.map(visibleRect);
     const pinned = controls.map(pinnedLayer);
+    const popups = controls.map(openPopup);
     const lines = controls.map(lineBoxes);
     for (let i = 0; i < controls.length; i++) {
       for (let j = i + 1; j < controls.length; j++) {
@@ -498,6 +547,7 @@
         const ratio = (w * h) / Math.min(ra.width * ra.height, rb.width * rb.height);
         if (ratio < overlapThreshold) continue;
         if (a.closest(LAYER) !== b.closest(LAYER)) continue;
+        if (popups[i] !== popups[j]) continue;
         const cx = Math.max(ra.left, rb.left) + w / 2, cy = Math.max(ra.top, rb.top) + h / 2;
         if (cx >= 0 && cy >= 0 && cx <= window.innerWidth && cy <= window.innerHeight) {
           const top = document.elementFromPoint(cx, cy);
@@ -512,13 +562,15 @@
     // its centre touches no other target and no other undersized target's circle.
     const targets = controls.map((el) => {
       const r = el.getBoundingClientRect();
-      return { r, x: r.left + r.width / 2, y: r.top + r.height / 2, small: r.width < minTarget || r.height < minTarget };
+      // Rounded as the message shows it: a 23.8px link is 24px to anyone looking at it.
+      return { r, x: r.left + r.width / 2, y: r.top + r.height / 2, small: Math.round(r.width) < minTarget || Math.round(r.height) < minTarget };
     });
     const crowdedBy = (k) => {
       const me = targets[k];
       for (let m = 0; m < controls.length; m++) {
         if (m === k || controls[k].contains(controls[m]) || controls[m].contains(controls[k])) continue;
-        if (passesOver(pinned[m], pinned[k])) continue;  // a floating panel is not a neighbour of the page under it
+        // A floating panel is not a neighbour of the page under it.
+        if (passesOver(pinned[m], pinned[k]) || popups[m] !== popups[k]) continue;
         const other = targets[m];
         if (!other.r.width || !other.r.height) continue;
         if (other.small) {
@@ -646,7 +698,8 @@
   // empty page measures clean and says nothing about the real page.
   function contentState() {
     const shown = (sel) => Array.from(document.querySelectorAll(sel)).filter(isVisible);
-    const busy = shown('[aria-busy="true"],[role=progressbar]').length;
+    // A progress bar with a value is a meter on the page; only one without a value says "wait".
+    const busy = shown('[aria-busy="true"],[role=progressbar]:not([aria-valuenow])').length;
     const skeletons = shown('[class*="skeleton" i],[class*="shimmer" i]').length;
     if (busy || skeletons >= 3) return { state: "loading", detail: busy ? "a region is still marked busy" : `${skeletons} skeleton placeholders` };
     const heading = shown("h1,h2,[role=heading]").map((el) => (el.innerText || "").replace(/\s+/g, " ").trim()).find(Boolean) || "";

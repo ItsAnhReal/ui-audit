@@ -1,0 +1,15 @@
+<!-- expect: clean -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>case</title><style>
+body { margin: 0; padding: 24px; font: 16px/1.5 sans-serif; }
+/* An opened menu without role=menu floats over the links below it, as menus do. */
+.dropdown { position: relative; } .dropdown button { height: 32px; }
+.menu { position: absolute; top: 100%; left: 0; z-index: 10; margin: 0; padding: 4px 0; list-style: none; background: #fff; border: 1px solid #ccc; width: 180px; }
+.menu a { display: block; padding: 6px 12px; }
+.below a { display: inline-block; padding: 8px 12px; }
+</style></head><body>
+<div class="dropdown">
+  <button aria-expanded="true" aria-controls="m">Account</button>
+  <ul class="menu" id="m"><li><a href="#p">Profile</a></li><li><a href="#s">Settings</a></li><li><a href="#o">Sign out</a></li></ul>
+</div>
+<div class="below"><a href="#x">Pricing</a> <a href="#y">Docs</a></div>
+</body></html>

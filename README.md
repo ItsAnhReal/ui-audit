@@ -2,11 +2,25 @@
 
 **Give your AI coding agent eyes.** `ui-audit` drives Chromium through every route and safe UI state of a running web app, sweeps the whole width range, measures layout defects, takes a bounded set of annotated screenshots, points at the likely source files, and verifies fixes against a baseline.
 
-It is a local CLI plus one portable Agent Skill shared by Claude Code and Codex. No account, no cloud.
+It is a local CLI, a local app, and one portable Agent Skill shared by Claude Code and Codex. No account, no cloud, MIT licensed.
+
+![The report viewer: a grid that only overflows between 800 and 946 px, found by the width sweep and boxed in the screenshot](docs/report-viewer.png)
 
 ```
 Discover → Sweep → Capture → Diagnose → Map to code → Patch → Targeted rerun → Verify → Full regression
 ```
+
+## Try it in a minute
+
+```bash
+git clone https://github.com/AnhAnAsian/ui-audit && cd ui-audit
+pip install -e .                 # Python 3.11+
+playwright install chromium
+python3 -m http.server 8765 -d demo &
+ui-audit audit http://localhost:8765 --project-root demo --open
+```
+
+The demo is a small site with planted defects. The one in the screenshot above is the point: four fixed columns that overflow only between 800 and 946 px, invisible at every common device preset.
 
 ## Why not just screenshot ten device sizes?
 
@@ -19,7 +33,7 @@ Responsive bugs live *between* presets: a grid that overflows from 800 to 946 px
 ## Install
 
 ```bash
-pip install -e ".[dev]"          # from a checkout; Python 3.11+
+pipx install git+https://github.com/AnhAnAsian/ui-audit   # or: pip install -e . in a checkout; Python 3.11+
 playwright install chromium      # or point --browser-path / UI_AUDIT_BROWSER_PATH at an existing Chromium
 ```
 
@@ -86,15 +100,15 @@ The server listens on 127.0.0.1 only, answers only to `127.0.0.1` and `localhost
 |---|---|---|
 | `horizontal-overflow` | P1 | The page scrolls sideways; reports the top-most element that sticks out, or the grid whose columns are wider than the grid itself |
 | `offscreen-control` / `offscreen-content` | P1 / P2 | A control or text is cut off at the viewport edge; not reported again when it is the same element (or grid) as a `horizontal-overflow` |
-| `clipped-content` | P2 | A box with hidden overflow cuts into the letters of its text (lost line spacing alone does not count; ellipsis and line-clamp are treated as intentional) |
+| `clipped-content` | P2 | A box with hidden overflow cuts into the letters of its text (lost line spacing alone does not count; ellipsis and line-clamp are treated as intentional, and so are whole slides or drawer panels parked beside the visible one) |
 | `text-spill` | P3 | Text visibly overflows its box |
-| `overlapping-controls` | P2 | Two interactive controls overlap by ≥20% (menus and dialogs layered on purpose, fixed or sticky bars over scrolling content, buttons inside a text field, small actions laid over a larger row, and wrapped inline links are excluded) |
+| `overlapping-controls` | P2 | Two interactive controls overlap by ≥20% (menus and dialogs layered on purpose, including an opened menu next to its expanded button, fixed or sticky bars over scrolling content, buttons inside a text field, small actions laid over a larger row, and wrapped inline links are excluded) |
 | `small-target` | P2 below 768px, else P3 | Pointer target smaller than 24×24px and closer than the WCAG 2.5.8 spacing exception allows to another target; inline text links excluded |
 | `unnamed-control` | P2 | No accessible name |
 | `console-error`, `failed-resource` | P2 | Runtime errors while loading or entering a state; an error logged while a state opened points at the dialog or menu that opened |
+| `semantic-*` | agent-assigned | Findings merged from the agent's review, labelled `origin: agent` |
 
 The three overflow checks are rated one step lower when the overflow is 4px or less, and one more step when it only occurs below 360px, the narrowest width most phones in use have. They are grouped as one cause in the report.
-| `semantic-*` | agent-assigned | Findings merged from the agent's review, labelled `origin: agent` |
 
 Deterministic findings are measurements. They can still be intentional; add those selectors to `[checks] ignore_selectors`.
 
@@ -175,14 +189,29 @@ python3 -m http.server 8765 -d demo &
 ui-audit audit http://localhost:8765 --project-root demo
 ```
 
+## How it compares
+
+| Tool | What it does | What ui-audit adds |
+|---|---|---|
+| Percy, Chromatic, BackstopJS | Compare screenshots with an approved baseline | Finds defects without a baseline, measures them instead of diffing pixels, and covers widths between presets |
+| Lighthouse, axe | Performance and accessibility rules on one viewport | Layout defects across the whole width range and in opened menus, tabs and dialogs |
+| Polypane, Responsively | Show many viewports side by side for a person to look at | Runs unattended and tells an agent what is broken, where, and in which file |
+| Playwright MCP, Chrome DevTools MCP | Give an agent a browser to drive | A systematic sweep, findings grouped by cause, and `verify` to prove a fix |
+
 ## Development
 
 ```bash
 pip install -e ".[dev]"
-pytest                 # unit tests + end-to-end tests against the demo (≈1 min)
+pytest                 # unit tests + end-to-end tests against the demo (a few minutes)
 pytest -m "not e2e"    # unit tests only
 ```
 
+Guidance for contributors and coding agents is in [`CLAUDE.md`](CLAUDE.md). A finding that is not a defect gets the smallest page reproducing it in `tests/cases/` before the check changes; bug reports with such a page are the most useful kind.
+
 ## Status
 
-Version 0.1.0. Not yet validated on a real application — see the project's definition of done. Known limits: Chromium only; source mapping is weak in production builds; automatic state discovery is intentionally shallow.
+Version 0.1.0, alpha. Tested on two of the author's own apps and on Docusaurus, the Astro blog starter and the Bootstrap examples; [`CHANGELOG.md`](CHANGELOG.md) lists what those runs changed. Known limits: Chromium only; source mapping is weak in production builds; automatic state discovery is intentionally shallow.
+
+## License
+
+[MIT](LICENSE)

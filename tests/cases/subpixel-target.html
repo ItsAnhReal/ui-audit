@@ -1,0 +1,9 @@
+<!-- expect: clean -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>case</title><style>
+body { margin: 0; padding: 24px; font: 14px/1.5 sans-serif; }
+/* Pagination links that render 23.8px wide: 24px to anyone looking at them. */
+.pages { display: flex; list-style: none; padding: 0; }
+.pages a { display: block; width: 23.8px; height: 31px; text-align: center; border: 0; }
+</style></head><body>
+<ul class="pages"><li><a href="#1">1</a></li><li><a href="#2">2</a></li><li><a href="#3">3</a></li></ul>
+</body></html>

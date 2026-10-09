@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,28 @@ version = "0.1.0"
 description = "Responsive UI Auditor: give your AI coding agent eyes across routes, UI states and responsive widths."
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "AnhAnAsian" }]
+keywords = ["responsive", "layout", "audit", "playwright", "accessibility", "ai-agent", "claude-code", "codex"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+]
 dependencies = ["playwright>=1.45"]
+
+[project.urls]
+Homepage = "https://github.com/AnhAnAsian/ui-audit"
+Issues = "https://github.com/AnhAnAsian/ui-audit/issues"
+Changelog = "https://github.com/AnhAnAsian/ui-audit/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 diff = ["Pillow>=10"]

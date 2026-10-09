@@ -161,7 +161,8 @@ def routes_from_source(root: Path, samples: dict[str, str]) -> tuple[list[str], 
                 inner = parts[len(base):-1]
                 if inner and inner[0] == "api":
                     continue
-                if name.startswith("_"):
+                # An endpoint such as rss.xml.js or data.json.ts serves a file, not a page.
+                if name.startswith("_") or ("." in name and not name.startswith("[")):
                     continue
                 segments = inner + ([] if name == "index" else [name])
                 record(*_segments_to_route(segments))
