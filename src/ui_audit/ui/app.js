@@ -186,7 +186,7 @@
   function viewState(name) {
     if (!S.views.has(name)) {
       S.views.set(name, { mode: prefs.get("list-mode", "cause"), sev: new Set(), route: "", check: "", text: "", width: null,
-        accepted: false, occ: {}, shot: {}, fit: true, others: false, accepting: null });
+        accepted: false, occ: {}, shot: {}, fit: true, zoom: true, others: false, accepting: null });
     }
     return S.views.get(name);
   }
@@ -535,6 +535,25 @@
     dialog.addEventListener("close", () => document.removeEventListener("keydown", onKey));
     show();
   }
+  // The part of a screenshot worth zooming into: the marked boxes with some room around them,
+  // at least a phone's width of context, never taller than wide. Screenshots are taken at a device
+  // pixel ratio of 1, so image and CSS pixels match. Null when zooming would barely enlarge it.
+  function zoomCrop(rects, W, H, frameWidth) {
+    if (!rects.length || !W || !H) return null;
+    const x0 = Math.min(...rects.map((r) => r.x)), y0 = Math.min(...rects.map((r) => r.y));
+    const x1 = Math.max(...rects.map((r) => r.x + r.width)), y1 = Math.max(...rects.map((r) => r.y + r.height));
+    const pad = Math.max(40, 0.3 * Math.max(x1 - x0, y1 - y0));
+    let w = Math.max(x1 - x0 + 2 * pad, 360);
+    let ht = y1 - y0 + 2 * pad;
+    if (ht > w * 0.75) w = ht / 0.75;
+    ht = Math.min(Math.max(ht, w * 0.4), w * 0.75);
+    w = Math.min(w, W); ht = Math.min(ht, H);
+    // fitted, the whole screenshot shows at most at its real size; the close-up at most at twice that
+    const frame = frameWidth || W;
+    if (Math.min(2, frame / w) < Math.min(1, frame / W) * 1.3) return null;
+    const clamp = (v, max) => Math.min(Math.max(0, v), max);
+    return { x: clamp((x0 + x1) / 2 - w / 2, W - w), y: clamp((y0 + y1) / 2 - ht / 2, H - ht), width: w, height: ht };
+  }
   function drawBoxes(stage, img, boxes, onPlaced) {
     const place = () => {
       for (const old of stage.querySelectorAll(".box")) old.remove();
@@ -712,20 +731,20 @@
           onClick: (e) => { e.stopPropagation(); togglePick(run.name); } });
         const more = h("button", { class: "btn ghost icon sm", "aria-label": t("runs.actions", { name: run.name }), "aria-haspopup": "menu", "aria-expanded": "false", onClick: (e) => { e.stopPropagation(); runMenu(e.currentTarget, run, runs); } }, icon("more"));
         return h("tr", { class: picked ? "selected" : null, onClick: () => go({ view: "run", run: run.name }) },
-          h("td", { class: "pick" }, box),
-          h("td", {}, h("a", { class: "name", href: link({ view: "run", run: run.name }), onClick: (e) => e.stopPropagation() }, run.name),
+          h("td", { class: "pick" }, h("label", { onClick: (e) => e.stopPropagation() }, box)),
+          h("td", { class: "run" }, h("a", { class: "name", href: link({ view: "run", run: run.name }), onClick: (e) => e.stopPropagation() }, run.name),
             h("div", { class: "tags" }, runTags(run))),
           h("td", { class: "when", title: fmt.date(run.created) }, fmt.ago(run.created)),
-          h("td", { class: "right hide-sm" }, plural(run.pages, "unit.pages.one", "unit.pages.many")),
+          h("td", { class: "right" }, plural(run.pages, "unit.pages.one", "unit.pages.many")),
           h("td", { class: "findings" }, countChips(run.counts)),
           h("td", { class: "right" }, fmt.dur(run.seconds)),
-          h("td", { class: "right hide-sm" }, fmt.bytes(run.bytes)),
+          h("td", { class: "right size" }, fmt.bytes(run.bytes)),
           h("td", { class: "menu-cell" }, more));
       });
       return h("div", { class: "card runs" }, h("table", {},
         h("thead", {}, h("tr", {}, h("th", { class: "pick" }, h("span", { class: "sr-only", text: t("runs.compareCol") })), h("th", { text: t("runs.run") }), h("th", { text: t("runs.when") }),
-          h("th", { class: "right hide-sm", text: t("runs.pages") }), h("th", { text: t("runs.findings") }), h("th", { class: "right", text: t("runs.took") }),
-          h("th", { class: "right hide-sm", text: t("runs.size") }), h("th", { class: "menu-cell" }, h("span", { class: "sr-only", text: t("runs.actionsCol") })))),
+          h("th", { class: "right", text: t("runs.pages") }), h("th", { text: t("runs.findings") }), h("th", { class: "right", text: t("runs.took") }),
+          h("th", { class: "right size", text: t("runs.size") }), h("th", { class: "menu-cell" }, h("span", { class: "sr-only", text: t("runs.actionsCol") })))),
         h("tbody", {}, rows)));
     }
 
@@ -1380,10 +1399,14 @@
       search.value = ""; routeSelect.value = ""; checkSelect.value = "";
       drawList(); drawDetail();
     }
+    const chartKeys = { w: null };  // where the keyboard cursor sits, kept across redraws
     function drawChart() {
       const pool = model.issues.filter((i) => matches(i, true) && i.widths && i.widths.length && !RUNTIME_CHECKS.has(i.check));
       const item = currentItem();
-      chartBox.replaceChildren(widthChart(model, pool, vs.width, item ? span(item.issues) : null, (w) => { vs.width = w === null || vs.width === w ? null : w; drawList(); }));
+      const focused = chartBox.contains(document.activeElement);
+      const chart = widthChart(model, pool, vs.width, item ? span(item.issues) : null, (w) => { vs.width = w === null || vs.width === w ? null : w; drawList(); }, chartKeys);
+      chartBox.replaceChildren(chart);
+      if (focused) chart.focusAt(chartKeys.w);
     }
     function currentItem() {
       if (!route.f) return null;
@@ -1505,7 +1528,9 @@
   }
 
   // The width chart: how many findings sit at each width, stacked by severity.
-  function widthChart(model, issues, picked, band, onPick) {
+  // Keyboard: ← → jump to the next width where the findings change, Shift moves 10 px,
+  // Home / End go to the ends, Enter filters the list to that width, Esc clears the filter.
+  function widthChart(model, issues, picked, band, onPick, keys = { w: null }) {
     const { LO, HI } = model;
     const N = 160;
     const step = (HI - LO) / N;
@@ -1524,8 +1549,7 @@
     const HT = 32;
     svg.setAttribute("viewBox", `0 0 ${N} ${HT}`);
     svg.setAttribute("preserveAspectRatio", "none");
-    svg.setAttribute("role", "img");
-    svg.setAttribute("aria-label", t("chart.aria", { n: issues.length }));
+    svg.setAttribute("aria-hidden", "true");
     svg.style.height = `${HT}px`;
     const layer = (cls, d, extra) => { const p = document.createElementNS(NS, "path"); p.setAttribute("d", d); p.setAttribute("class", cls); for (const [k, v] of Object.entries(extra || {})) p.setAttribute(k, v); svg.append(p); };
     if (band && band[0] !== undefined) {
@@ -1543,7 +1567,9 @@
       if (d) layer("", d, { fill: `var(--${s.toLowerCase()})` });
     }
     layer("base", `M0 ${HT}H${N}`, { "vector-effect": "non-scaling-stroke" });
-    const wrap = h("div", { style: { position: "relative" } }, svg);
+    const hint = h("span", { class: "sr-only", id: `wchart-keys-${++widthChart.n}`, text: t("chart.keys") });
+    const wrap = h("div", { class: "slider", style: { position: "relative" }, tabindex: "0", role: "slider", "aria-label": t("chart.aria", { n: issues.length }),
+      "aria-describedby": hint.id, "aria-valuemin": String(LO), "aria-valuemax": String(HI) }, svg, hint);
     const axis = h("div", { style: { position: "relative", height: "18px" } });
     const labels = new Map([[LO, ""], [HI, ""]]);
     for (const w of [390, 768, 1366]) if (w > LO && w < HI) labels.set(w, "");
@@ -1563,29 +1589,72 @@
     const widthAt = (event) => {
       const box = svg.getBoundingClientRect();
       const ratio = Math.min(1, Math.max(0, (event.clientX - box.left) / box.width));
-      return { w: Math.round(LO + ratio * (HI - LO)), x: ratio * box.width, box };
+      return Math.round(LO + ratio * (HI - LO));
     };
-    svg.addEventListener("pointermove", (event) => {
-      const { w, x, box } = widthAt(event);
-      const at = issues.filter((i) => lo(i) <= w && w <= hi(i));
-      const c = counts(at.map((i) => ({ ...i, accepted: false })));
+    const findingsAt = (w) => issues.filter((i) => lo(i) <= w && w <= hi(i));
+    const valueText = (w) => {
+      const c = counts(findingsAt(w).map((i) => ({ ...i, accepted: false })));
+      return [`${w} px`, plural(findingsAt(w).length, "list.findings.one", "list.findings.many"), ...SEVS.filter((s) => c[s]).map((s) => `${c[s]} ${s}`)].join(", ");
+    };
+    const showAt = (w) => {
+      const box = svg.getBoundingClientRect();
+      const x = (pct(w) / 100) * box.width;
+      const c = counts(findingsAt(w).map((i) => ({ ...i, accepted: false })));
       cursor.style.display = "block";
       cursor.style.left = `${x}px`;
       tip.hidden = false;
-      tip.replaceChildren(h("b", { text: `${w} px` }), h("div", { style: { color: "var(--text-3)" }, text: plural(at.length, "list.findings.one", "list.findings.many") }),
+      tip.replaceChildren(h("b", { text: `${w} px` }), h("div", { style: { color: "var(--text-3)" }, text: plural(findingsAt(w).length, "list.findings.one", "list.findings.many") }),
         ...SEVS.filter((s) => c[s]).map((s) => h("div", { class: `row ${s}` }, h("i"), `${c[s]} ${s}`)));
       const left = x + 12 + tip.offsetWidth > box.width ? x - tip.offsetWidth - 12 : x + 12;
-      tip.style.left = `${left}px`;
+      tip.style.left = `${Math.max(0, left)}px`;
       tip.style.top = "-6px";
+    };
+    const hide = () => { cursor.style.display = "none"; tip.hidden = true; };
+    // a width without findings would only empty the list
+    const pick = (w) => onPick(findingsAt(w).length ? w : null);
+    svg.addEventListener("pointermove", (event) => showAt(widthAt(event)));
+    svg.addEventListener("pointerleave", () => { if (document.activeElement === wrap) showAt(keys.w); else hide(); });
+    svg.addEventListener("click", (event) => { keys.w = widthAt(event); pick(keys.w); });
+
+    // the widths where the set of findings changes: the stops for ← →
+    const setAt = (w) => findingsAt(w).map((i) => i.id).join(" ");
+    const stops = [...new Set([LO, ...issues.flatMap((i) => [lo(i), hi(i) + 1])])]
+      .filter((w) => w >= LO && w <= HI).sort((a, b) => a - b)
+      .filter((w, n, all) => n === 0 || setAt(w) !== setAt(all[n - 1]));
+    if (stops[stops.length - 1] !== HI) stops.push(HI);
+    const clamp = (w) => Math.min(HI, Math.max(LO, Math.round(w)));
+    const start = () => clamp(picked ?? (band && band[0] !== undefined ? band[0] : stops.find((w) => findingsAt(w).length) ?? LO));
+    const moveTo = (w) => {
+      keys.w = clamp(w);
+      wrap.setAttribute("aria-valuenow", String(keys.w));
+      wrap.setAttribute("aria-valuetext", valueText(keys.w));
+      showAt(keys.w);
+    };
+    wrap.addEventListener("focus", () => moveTo(keys.w ?? start()));
+    wrap.addEventListener("blur", hide);
+    wrap.addEventListener("keydown", (event) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const w = keys.w ?? start();
+      let next = null;
+      if (event.key === "ArrowRight" || event.key === "ArrowUp") next = event.shiftKey ? w + 10 : stops.find((s) => s > w) ?? HI;
+      else if (event.key === "ArrowLeft" || event.key === "ArrowDown") next = event.shiftKey ? w - 10 : [...stops].reverse().find((s) => s < w) ?? LO;
+      else if (event.key === "PageUp") next = w + 100;
+      else if (event.key === "PageDown") next = w - 100;
+      else if (event.key === "Home") next = LO;
+      else if (event.key === "End") next = HI;
+      else if (event.key === "Enter" || event.key === " ") { event.preventDefault(); pick(w); return; }
+      else if (event.key === "Escape" && picked !== null) { event.preventDefault(); event.stopPropagation(); onPick(null); return; }
+      if (next === null) return;
+      event.preventDefault();
+      moveTo(next);
     });
-    svg.addEventListener("pointerleave", () => { cursor.style.display = "none"; tip.hidden = true; });
-    svg.addEventListener("click", (event) => {
-      const { w } = widthAt(event);
-      // a width without findings would only empty the list
-      onPick(issues.some((i) => lo(i) <= w && w <= hi(i)) ? w : null);
-    });
-    return h("div", {}, wrap, axis);
+    wrap.setAttribute("aria-valuenow", String(keys.w ?? start()));
+    wrap.setAttribute("aria-valuetext", valueText(keys.w ?? start()));
+    const node = h("div", {}, wrap, axis);
+    node.focusAt = (w) => { wrap.focus({ preventScroll: true }); if (w !== null) moveTo(w); };
+    return node;
   }
+  widthChart.n = 0;
 
   // ----- one finding (or one cause with all its places)
 
@@ -1688,9 +1757,10 @@
     const wrapEl = h("div", { class: "stage-wrap" });
     const note = h("p", { class: "stage-note" });
     const fitBtn = h("button", { class: "btn sm", "aria-pressed": String(!vs.fit), title: t("detail.actual.title") });
+    const zoomBtn = h("button", { class: "btn sm", title: t("detail.zoom.title"), hidden: true }, icon("search"), t("detail.zoom"));
     const othersBtn = h("button", { class: "btn sm" });
     const bigBtn = h("button", { class: "btn sm icon", "aria-label": t("detail.fullscreen"), title: t("detail.fullscreen") }, icon("expand"));
-    tools.append(widths, othersBtn, fitBtn, bigBtn);
+    tools.append(widths, othersBtn, zoomBtn, fitBtn, bigBtn);
     box.append(h("p", { class: "label", text: t("detail.screenshot") }), tools, note, wrapEl);
 
     const inRange = (c) => lo(issue) !== undefined && c.width >= lo(issue) && c.width <= hi(issue);
@@ -1708,6 +1778,27 @@
       const img = h("img", { src: fileUrl(model, capture.file), alt: t("detail.shotAlt", { route: issue.route, w: capture.width }), decoding: "async" });
       const stage = h("div", { class: `stage${vs.fit ? "" : " actual"}` }, img);
       wrapEl.replaceChildren(stage);
+      zoomBtn.hidden = true;
+      fitBtn.hidden = false;
+      let zoomed = false;
+      // zoom into the marked element once the image's real size is known, before the boxes are placed
+      const zoom = () => {
+        const W = img.naturalWidth, H = img.naturalHeight;
+        const crop = zoomCrop(boxes.filter((b) => !b.other).map((b) => b.rect), W, H, wrapEl.clientWidth);
+        zoomBtn.hidden = !crop;
+        zoomBtn.setAttribute("aria-pressed", String(!!crop && vs.zoom));
+        if (!crop || !vs.zoom) return;
+        zoomed = true;
+        fitBtn.hidden = true;
+        stage.className = "stage";
+        // at most twice the real size, so small elements don't turn into a blur
+        const frame = h("div", { class: "crop", style: { aspectRatio: `${crop.width} / ${crop.height}`, maxWidth: `${Math.round(crop.width * 2)}px` } });
+        stage.style.width = `${(W / crop.width) * 100}%`;
+        stage.style.transform = `translate(${(-crop.x / W) * 100}%, ${(-crop.y / H) * 100}%)`;
+        wrapEl.replaceChildren(frame);
+        frame.append(stage);
+      };
+      if (img.complete && img.naturalWidth) zoom(); else img.addEventListener("load", zoom, { once: true });
       wrapEl.classList.add("loading-img");
       img.addEventListener("load", () => wrapEl.classList.remove("loading-img"), { once: true });
       img.addEventListener("error", () => {
@@ -1716,7 +1807,7 @@
         note.textContent = ""; note.className = "stage-note";
       }, { once: true });
       drawBoxes(stage, img, boxes, (rect, W) => {
-        if (!rect) return;
+        if (!rect || zoomed) return;
         const scale = img.clientWidth / W;
         // near the top, so the box shows even when the frame runs past the bottom of the window
         wrapEl.scrollTop = Math.max(0, rect.y * scale - Math.min(96, wrapEl.clientHeight * 0.3));
@@ -1732,6 +1823,7 @@
     }
     fitBtn.addEventListener("click", () => { vs.fit = !vs.fit; fitBtn.setAttribute("aria-pressed", String(!vs.fit)); show(); });
     othersBtn.addEventListener("click", () => { vs.others = !vs.others; show(); });
+    zoomBtn.addEventListener("click", () => { vs.zoom = !vs.zoom; show(); zoomBtn.focus(); });
     widths.addEventListener("step", (event) => {
       const at = caps.indexOf(capture);
       const ahead = event.detail > 0 ? caps.slice(at + 1) : caps.slice(0, at).reverse();
