@@ -212,7 +212,7 @@ A page that is still loading, shows an error or "unavailable" message, or is alm
 
 ## Consent banners and setup
 
-A cookie banner sits on top of every page and hides what is under it. With `[states] dismiss_consent = true` (the default) `ui-audit` looks for the banner's button that turns optional cookies down ("Only necessary", "Reject", "Ablehnen", …), clicks it once, and audits the pages a returning visitor sees. It never clicks "Accept all". The label it clicked is recorded as `consent_dismissed` in `report.json`. Set it to `false` to audit the first-visit view with the banner open.
+A cookie banner sits on top of every page and hides what is under it. With `[states] dismiss_consent = true` (the default) `ui-audit` looks for the banner's button that turns optional cookies down ("Only necessary", "Reject", "Ablehnen", …), clicks it once, and audits the pages a returning visitor sees. It only clicks inside a dialog or a fixed or floating box whose own text is about cookies or privacy, and never "Accept all". The label it clicked is recorded as `consent_dismissed` in `report.json`. Set it to `false` to audit the first-visit view with the banner open.
 
 For anything else that has to be out of the way first, list actions in `setup`; they run once on `/` before anything is measured (a failure there is reported in `errors`), and again on every page that is loaded, so a dismissal the app does not remember stays dismissed. An action whose target is not on the page is skipped:
 
@@ -222,7 +222,9 @@ setup = [{ click = "#close-promo" }]
 
 ## Routes
 
-Discovered from `[routes] include`, framework conventions in `project_root` (Next.js app and pages routers, Nuxt, Astro, SvelteKit, React Router route tables, static `*.html`), `sitemap.xml`, and a same-origin crawl. Dynamic routes are listed as skipped until you give a sample in `[routes] samples`.
+Discovered from `[routes] include`, framework conventions in `project_root` (Next.js app and pages routers, Nuxt, Astro, SvelteKit, Remix and React Router flat routes in `app/routes`, React Router route tables, static `*.html`), sitemaps, and a same-origin crawl. Dynamic routes are listed as skipped until you give a sample in `[routes] samples`.
+
+Routes are paths relative to `base_url`: for an app at `http://localhost:3000/app/`, the route `/settings` is `http://localhost:3000/app/settings`, and links outside `/app/` are not followed. Hash-router pages are routes of their own (`/#/settings`); plain in-page anchors (`#section`) are not. Sitemaps are read from `sitemap.xml` under `base_url` and from the `Sitemap:` lines of `/robots.txt`, following sitemap indexes; they are always fetched from the audited app, and entries naming the production host count by their path.
 
 In a project whose `package.json` names a client-side router (React Router, Vue Router, …) and no file-based one, `pages/` is a folder of components, so its file names are not treated as URLs; only the route table counts.
 

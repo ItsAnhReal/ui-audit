@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Route discovery: apps under a sub-path (`base_url = "http://host/app/"`) get routes relative to it instead of `/app/app/…`; hash-router pages (`/#/settings`) and Remix / React Router flat routes in `app/routes` are found; sitemaps listing the production host, sitemap indexes and `Sitemap:` lines in `robots.txt` are read.
+- Safer automatic clicks: the consent banner's decline button is only clicked inside a dialog or a fixed or floating box about cookies, and unsafe words (now also reset, archive, save, approve, reject, transfer, refund, … and German equivalents) match whole words, so "order" no longer stops "Border options". Custom `unsafe_words` match whole words too.
+
 ## 0.1.0 — first public release
 
 - `ui-audit audit`: route discovery (config, framework conventions, sitemap, crawl), conservative state discovery, a full width sweep with boundary refinement, bounded screenshots, findings grouped by cause, source hints, and a content check for pages that measure clean for the wrong reason.
