@@ -11,7 +11,7 @@ from importlib import resources
 from pathlib import Path
 
 from . import __version__
-from .config import CONFIG_FILENAME, ConfigError, from_dict, load, parse_browsers, render_template
+from .config import CONFIG_FILENAME, ConfigError, from_dict, load, parse_browsers, render_template, validate
 from .sources import SOURCE_EXTS
 
 SKILL_TARGETS = {
@@ -253,6 +253,11 @@ def cmd_audit(args) -> int:
         cfg.viewports.max_captures = args.max_captures
     if args.sweep_step:
         cfg.viewports.sweep_step = args.sweep_step
+    try:
+        validate(cfg)
+    except ConfigError as exc:
+        print(f"config error: {exc}", file=sys.stderr)
+        return 2
     log = (lambda _msg: None) if args.quiet else (lambda msg: print(msg, file=sys.stderr))
     only_routes = args.route or None
     if args.changed_since:

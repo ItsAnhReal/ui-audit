@@ -152,9 +152,41 @@ def from_dict(data: dict[str, Any]) -> Config:
         raise ConfigError(f"unknown discovery method(s): {', '.join(sorted(bad))}")
     if cfg.states.sweep not in ("full", "key"):
         raise ConfigError('states.sweep must be "full" or "key"')
-    if cfg.viewports.min_width > cfg.viewports.max_width:
-        raise ConfigError("viewports.min_width must not exceed viewports.max_width")
+    validate(cfg)
     return cfg
+
+
+def _number(value, where: str, low: float | None = None, high: float | None = None, integer: bool = True):
+    kinds = (int,) if integer else (int, float)
+    if isinstance(value, bool) or not isinstance(value, kinds):
+        raise ConfigError(f"{where} must be {'an integer' if integer else 'a number'}, not {value!r}")
+    if (low is not None and value < low) or (high is not None and value > high):
+        if high is None:
+            raise ConfigError(f"{where} must be at least {low}, not {value!r}")
+        raise ConfigError(f"{where} must be between {low} and {high}, not {value!r}")
+
+
+def validate(cfg: Config) -> None:
+    """Reject numbers out of range, with the key that holds them."""
+    _number(cfg.settle_ms, "settle_ms", 0)
+    _number(cfg.routes.max_routes, "routes.max_routes", 1)
+    _number(cfg.routes.crawl_depth, "routes.crawl_depth", 0)
+    _number(cfg.states.max_per_route, "states.max_per_route", 0)
+    vp = cfg.viewports
+    _number(vp.min_width, "viewports.min_width", 1)
+    _number(vp.max_width, "viewports.max_width", 1)
+    _number(vp.sweep_step, "viewports.sweep_step", 1)
+    _number(vp.max_refinements, "viewports.max_refinements", 0)
+    _number(vp.max_captures, "viewports.max_captures", 0)
+    if not isinstance(vp.widths, list):
+        raise ConfigError("viewports.widths must be a list of widths")
+    for width in vp.widths:
+        _number(width, "every width in viewports.widths", 1)
+    if vp.min_width > vp.max_width:
+        raise ConfigError("viewports.min_width must not exceed viewports.max_width")
+    _number(cfg.checks.min_target_size, "checks.min_target_size", 0)
+    _number(cfg.checks.overlap_threshold, "checks.overlap_threshold", 0, 1, integer=False)
+    _number(cfg.checks.max_issues_per_check, "checks.max_issues_per_check", 1)
 
 
 def find_config(start: Path) -> Path | None:
