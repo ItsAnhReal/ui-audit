@@ -15,9 +15,13 @@ PROBE_JS = resources.files("ui_audit").joinpath("probe.js").read_text(encoding="
 
 def _fallback_executables() -> list[str]:
     """Chromium builds already on disk, for when Playwright's pinned build is absent."""
-    roots = [os.environ.get("PLAYWRIGHT_BROWSERS_PATH", ""), str(Path.home() / ".cache/ms-playwright"), "/opt/pw-browsers"]
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    roots = [os.environ.get("PLAYWRIGHT_BROWSERS_PATH", ""), str(Path.home() / ".cache/ms-playwright"),
+             str(Path.home() / "Library/Caches/ms-playwright"),
+             str(Path(local_app_data) / "ms-playwright") if local_app_data else "", "/opt/pw-browsers"]
     patterns = ["chromium-*/chrome-linux*/chrome", "chromium-*/chrome-mac*/Chromium.app/Contents/MacOS/Chromium",
-                "chromium-*/chrome-win*/chrome.exe"]
+                "chromium-*/chrome-win*/chrome.exe",
+                "chromium-*/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"]
     found = []
     for root in filter(None, roots):
         for pattern in patterns:
@@ -25,19 +29,19 @@ def _fallback_executables() -> list[str]:
     return found
 
 
-def launch(playwright, executable_path: str = ""):
+def launch(playwright, executable_path: str = "", headless: bool = True):
     """Launch Chromium, falling back to any local Chromium build if needed."""
     path = executable_path or os.environ.get("UI_AUDIT_BROWSER_PATH", "")
     if path:
-        return playwright.chromium.launch(executable_path=path)
+        return playwright.chromium.launch(executable_path=path, headless=headless)
     try:
-        return playwright.chromium.launch()
+        return playwright.chromium.launch(headless=headless)
     except Exception as first_error:
         if "Executable doesn't exist" not in str(first_error):
             raise
         for candidate in _fallback_executables():
             try:
-                return playwright.chromium.launch(executable_path=candidate)
+                return playwright.chromium.launch(executable_path=candidate, headless=headless)
             except Exception:  # noqa: BLE001 - try the next candidate
                 continue
         raise
@@ -57,6 +61,9 @@ class RuntimeLog:
     def on_failure(self, url: str, reason: str) -> None:
         # Browsers request /favicon.ico on their own; its absence is noise.
         if urlparse(url).path == "/favicon.ico":
+            return
+        # The page cancelled the request itself (it navigated or unmounted); nothing failed.
+        if "ERR_ABORTED" in reason:
             return
         self.failed_resources.append(f"{url} ({reason})"[:300])
 
@@ -85,28 +92,77 @@ def session(cfg):
         page.on("response", lambda res: res.status >= 400 and log.on_failure(res.url, str(res.status)))
         try:
             yield page, log
+            if cfg.storage_state:
+                # Sign-in tokens rotate while the app runs; keep the newest ones so the next
+                # audit does not start from a token that has already been exchanged.
+                try:
+                    context.storage_state(path=cfg.storage_state)
+                    Path(cfg.storage_state).chmod(0o600)
+                except Exception:  # noqa: BLE001 - a read-only session file still works for this run
+                    pass
         finally:
             context.close()
             browser.close()
+
+
+def save_session(cfg, target: Path, path: str, wait, headless: bool = False) -> Path:
+    """Open the app in a window, let `wait()` return once the person has signed in, and save
+    the browser's cookies and local storage for `storage_state`."""
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as playwright:
+        browser = launch(playwright, cfg.browser_path, headless=headless)
+        context = browser.new_context(viewport={"width": 1280, "height": 900})
+        try:
+            context.new_page().goto(url_for(cfg.base_url, path), wait_until="load", timeout=30000)
+            wait()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            context.storage_state(path=str(target))
+        finally:
+            context.close()
+            browser.close()
+    target.chmod(0o600)  # it holds a signed-in session
+    return target
 
 
 def url_for(base_url: str, path: str) -> str:
     return urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
 
 
-def load(page, base_url: str, path: str, width: int, height: int, settle_ms: int) -> None:
+def load(page, base_url: str, path: str, width: int, height: int, settle_ms: int):
+    """Open a route and return the main document's response (None if there was none)."""
     page.set_viewport_size({"width": width, "height": height})
-    page.goto(url_for(base_url, path), wait_until="load", timeout=30000)
+    response = page.goto(url_for(base_url, path), wait_until="load", timeout=30000)
     try:
         page.wait_for_load_state("networkidle", timeout=5000)
     except Exception:  # noqa: BLE001 - long-polling apps never go idle
         pass
+    try:  # a page that says it is still loading is not measured, or mistaken for another, as a skeleton
+        page.wait_for_function("() => !document.querySelector('[aria-busy=\"true\"]')", timeout=4000)
+    except Exception:  # noqa: BLE001 - some pages keep a busy region for good
+        pass
     settle(page, settle_ms)
+    return response
+
+
+# Waits for CSS transitions and animations that are about to end, so nothing is measured
+# mid-flight. Endless ones (spinners, marquees) and anything longer than the cap are not waited for.
+_QUIESCE_JS = """cap => new Promise(resolve => {
+  const deadline = performance.now() + cap;
+  const moving = () => document.getAnimations().some(a => {
+    if (a.playState !== "running" || !a.effect) return false;
+    const end = a.effect.getComputedTiming().endTime;
+    return Number.isFinite(end) && end - (a.currentTime || 0) <= cap;
+  });
+  const tick = () => (!moving() || performance.now() >= deadline) ? resolve() : requestAnimationFrame(tick);
+  requestAnimationFrame(() => requestAnimationFrame(tick));
+})"""
+QUIESCE_CAP_MS = 600
 
 
 def settle(page, settle_ms: int) -> None:
     """Let layout, transitions and fonts finish after a change."""
-    page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+    page.evaluate(_QUIESCE_JS, QUIESCE_CAP_MS)
     if settle_ms:
         page.wait_for_timeout(settle_ms)
 

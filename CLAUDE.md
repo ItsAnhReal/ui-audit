@@ -22,7 +22,7 @@ If Playwright's pinned Chromium is missing, `browser.launch()` falls back to any
 
 | Module | Responsibility |
 |---|---|
-| `cli.py` | argparse commands: `init`, `doctor`, `audit`, `merge-findings`, `verify`, `install-skill` |
+| `cli.py` | argparse commands: `init`, `doctor`, `audit`, `login`, `report`, `merge-findings`, `verify`, `install-skill` |
 | `config.py` | dataclass config, `ui-audit.toml` loading (unknown keys are errors), template |
 | `audit.py` | the pipeline: routes → states → sweep → captures → source hints → reports |
 | `probe.js` | injected as an init script; all in-page measurement, state candidates, annotations |
@@ -32,6 +32,7 @@ If Playwright's pinned Chromium is missing, `browser.launch()` falls back to any
 | `issues.py` | issue signatures and aggregation across widths and states |
 | `sources.py` | ranking candidate source files from runtime and DOM hints |
 | `report.py`, `semantic.py`, `verify.py` | report.json/index.html, agent review packet + merge, baseline comparison |
+| `report_template.html` | the report viewer: one self-contained page; `report.py` inlines the report data into it |
 | `skill/SKILL.md` | the shared agent skill shipped with the package |
 | `demo/` | deliberately broken site; its README lists every planted defect |
 

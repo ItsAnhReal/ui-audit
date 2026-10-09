@@ -6,7 +6,7 @@ A three-page static site used by the end-to-end tests. Every defect is deliberat
 |---|---|---|---|---|
 | `/` | default | 800–946 | Four fixed 220px feature columns | `horizontal-overflow` |
 | `/` | menu open | 320–767 | Drawer positioned `right: -60px` | `horizontal-overflow` |
-| `/` | all | all | 18px icon button without a label | `small-target`, `unnamed-control` |
+| `/` | all | all | Two 18px icon buttons without a label, 4px apart | `small-target` ×2, `unnamed-control` ×2 |
 | `/pricing.html` | default | 320–767 | Price in an 80px box with hidden overflow | `clipped-content` ×3 |
 | `/pricing.html` | default | 768–1023 | "Contact" slides under "Compare" | `overlapping-controls` ×3 |
 | `/dashboard.html` | Reports tab | all | Report text in a 60px box with hidden overflow | `clipped-content` |

@@ -46,9 +46,24 @@ def default_state(route: str) -> State:
     return State(id="default", route=route, kind="default", label="Initial page")
 
 
+def open_page(page, cfg, route: str, width: int, height: int):
+    """Load a route and replay the setup actions on it; returns the document's response.
+
+    Setup often only changes the current DOM (closing a promo that is not remembered), so it
+    has to run again on every page that is measured, not just once. An action whose target
+    is not there (a promo that stayed closed) is skipped.
+    """
+    response = browser.load(page, cfg.base_url, route, width, height, cfg.settle_ms)
+    if cfg.setup:
+        for action in cfg.setup:
+            _run_action(page, action)
+        browser.settle(page, cfg.settle_ms)
+    return response
+
+
 def apply(page, cfg, state: State, width: int, height: int) -> bool:
     """Load the route at `width` and replay the state. False if not applicable."""
-    browser.load(page, cfg.base_url, state.route, width, height, cfg.settle_ms)
+    open_page(page, cfg, state.route, width, height)
     url_before = page.url
     for action in state.actions:
         if not _run_action(page, action):
@@ -57,6 +72,30 @@ def apply(page, cfg, state: State, width: int, height: int) -> bool:
     if state.kind == "auto" and page.url != url_before:
         return False
     return True
+
+
+def dismiss_consent(page, cfg) -> str | None:
+    """Turn optional cookies down if a consent banner is showing; returns the button's label."""
+    try:
+        found = page.evaluate("() => window.__uiAudit.consentDecline()")
+        if not found:
+            return None
+        page.locator(found["selector"]).first.click(timeout=3000)
+        browser.settle(page, cfg.settle_ms)
+    except Exception:  # noqa: BLE001 - a banner that cannot be closed is audited as it is
+        return None
+    return found["label"]
+
+
+def run_setup(page, cfg) -> list[str]:
+    """Run the configured setup actions on "/"; returns one message per action that failed."""
+    if not cfg.setup:
+        return []
+    browser.load(page, cfg.base_url, "/", 1280, 900, cfg.settle_ms)
+    failed = [f"setup: action {n} could not run ({action})" for n, action in enumerate(cfg.setup, 1)
+              if not _run_action(page, action)]
+    browser.settle(page, cfg.settle_ms)
+    return failed
 
 
 def _run_action(page, action: dict) -> bool:
@@ -103,10 +142,11 @@ def discover(page, cfg, route: str) -> list[State]:
     opts = {"unsafeWords": cfg.states.unsafe_words, "ignoreSelectors": cfg.checks.ignore_selectors}
     for applies_to, (width, height) in DISCOVERY_WIDTHS.items():
         try:
-            browser.load(page, cfg.base_url, route, width, height, cfg.settle_ms)
+            open_page(page, cfg, route, width, height)
             candidates = page.evaluate("o => window.__uiAudit.stateCandidates(o)", opts)
         except Exception:  # noqa: BLE001 - an unloadable route yields no states
             continue
+        clean = True  # the page is as it was loaded
         for candidate in candidates:
             if len(found) >= cfg.states.max_per_route:
                 return found
@@ -115,7 +155,8 @@ def discover(page, cfg, route: str) -> list[State]:
                 # Visible at both widths: the state applies everywhere.
                 seen_triggers[selector].applies_to = "any"
                 continue
-            if _changes_dom(page, cfg, route, selector, width, height):
+            changes, clean = _changes_dom(page, cfg, route, selector, width, height, clean)
+            if changes:
                 state = State(id=f"{candidate['kind']}-{slug(candidate['label'])}", route=route, kind="auto",
                               label=f"{candidate['kind']}: {candidate['label']}", actions=[{"click": selector}],
                               trigger=selector, applies_to=applies_to)
@@ -126,16 +167,34 @@ def discover(page, cfg, route: str) -> list[State]:
     return found
 
 
-def _changes_dom(page, cfg, route: str, selector: str, width: int, height: int) -> bool:
+def _changes_dom(page, cfg, route: str, selector: str, width: int, height: int, clean: bool) -> tuple[bool, bool]:
+    """Click a candidate and report (it opened something, the page is back as loaded).
+
+    Reloading before every candidate made discovery the slowest part of an audit. A
+    disclosure can be closed again, so the page is reloaded only when closing it (Escape,
+    then a second click) does not bring the page back to what it was.
+    """
     try:
-        browser.load(page, cfg.base_url, route, width, height, cfg.settle_ms)
+        if not clean:
+            open_page(page, cfg, route, width, height)
         before_url = page.url
         before = page.evaluate("() => window.__uiAudit.domFingerprint()")
         page.locator(selector).first.click(timeout=3000)
         browser.settle(page, cfg.settle_ms)
         if page.url != before_url:
-            return False
+            return False, False
         after = page.evaluate("() => window.__uiAudit.domFingerprint()")
-        return after != before
+        if after == before:
+            return False, True
     except Exception:  # noqa: BLE001 - unclickable trigger
-        return False
+        return False, False
+    try:
+        page.keyboard.press("Escape")
+        browser.settle(page, cfg.settle_ms)
+        if page.evaluate("() => window.__uiAudit.domFingerprint()") != before:
+            page.locator(selector).first.click(timeout=1500)
+            browser.settle(page, cfg.settle_ms)
+        restored = page.url == before_url and page.evaluate("() => window.__uiAudit.domFingerprint()") == before
+    except Exception:  # noqa: BLE001 - whatever is open now, the next candidate starts from a reload
+        restored = False
+    return True, restored

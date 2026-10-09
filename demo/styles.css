@@ -6,7 +6,9 @@ header { display: flex; align-items: center; justify-content: space-between; pad
 .menu-button { display: none; padding: 8px 12px; font: inherit; }
 .site-nav { display: flex; gap: 16px; }
 .site-nav a { padding: 8px 4px; }
-/* BUG small-target + unnamed-control: an 18px icon-only button with no label. */
+/* BUG small-target + unnamed-control: two 18px icon-only buttons with no label, 4px apart.
+   One such button on its own would pass WCAG 2.5.8 through its spacing exception. */
+.icon-group { display: flex; gap: 4px; }
 .icon-button { width: 18px; height: 18px; padding: 0; border: 1px solid #98a2b3; background: #fff; border-radius: 4px; }
 main { padding: 20px; max-width: 1100px; margin: 0 auto; }
 .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }

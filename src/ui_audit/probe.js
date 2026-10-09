@@ -11,6 +11,9 @@
     "[role=switch]", "[tabindex]:not([tabindex='-1'])",
   ].join(",");
   const LAYER = "[role=menu],[role=dialog],[role=listbox],[role=tooltip],[popover],dialog,[aria-modal=true]";
+  const TEXT_FIELD = "textarea,select,input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=reset]):not([type=image]):not([type=range]):not([type=color]):not([type=file])";
+  const CONSENT_DECLINE = /only (the )?(necessary|essential|required)|(necessary|essential|required)( cookies)? only|reject|decline|deny|refuse|nur (notwendige|erforderliche|essenzielle)|ablehnen|refuser|rechazar|rifiuta/i;
+  const CONSENT_TOPIC = /cookie|consent|einwilligung/i;
   const DEFAULT_UNSAFE = [
     "delete", "remove", "logout", "log out", "sign out", "signout", "pay", "buy", "purchase",
     "checkout", "order", "submit", "send", "publish", "unsubscribe", "cancel subscription",
@@ -83,6 +86,60 @@
       if (ox !== "visible") return { node, mode: ox };
     }
     return null;
+  }
+
+  // The part of an element that scrolling and clipping ancestors leave on screen.
+  function visibleRect(el) {
+    const r = el.getBoundingClientRect();
+    const box = { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+    for (let node = el; node && node !== document.body; node = node.parentElement) {
+      if (getComputedStyle(node).position === "fixed") break;  // fixed boxes escape their ancestors' clip
+      const parent = node.parentElement;
+      if (!parent || parent === document.body || parent === document.documentElement) break;
+      const style = getComputedStyle(parent);
+      if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+      const clip = parent.getBoundingClientRect();
+      box.left = Math.max(box.left, clip.left); box.right = Math.min(box.right, clip.right);
+      box.top = Math.max(box.top, clip.top); box.bottom = Math.min(box.bottom, clip.bottom);
+    }
+    box.width = Math.max(box.right - box.left, 0);
+    box.height = Math.max(box.bottom - box.top, 0);
+    return box;
+  }
+
+  const truncates = (style) => style.textOverflow === "ellipsis" || (style.webkitLineClamp && style.webkitLineClamp !== "none");
+
+  // Whether glyphs, not just line spacing or padding, cross the box that clips them.
+  // scrollHeight counts the empty leading of a line box, so a 20px line in an 18px
+  // box "overflows" although every letter is visible.
+  function inkIsClipped(el, horizontal) {
+    const box = el.getBoundingClientRect();
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const range = document.createRange();
+    for (let node = walker.nextNode(), seen = 0; node && seen < 200; node = walker.nextNode()) {
+      if (!node.nodeValue.trim()) continue;
+      seen++;
+      const parent = node.parentElement;
+      if (!parent || !isVisible(parent) || isScreenReaderOnly(parent)) continue;
+      // Text that a box in between already shortens on purpose is not this box's defect.
+      let intended = false;
+      for (let up = parent; up && up !== el; up = up.parentElement) {
+        if (truncates(getComputedStyle(up))) { intended = true; break; }
+      }
+      if (intended) continue;
+      const fontSize = parseFloat(getComputedStyle(parent).fontSize) || 16;
+      range.selectNodeContents(node);
+      for (const r of range.getClientRects()) {
+        if (!r.width || !r.height) continue;
+        if (horizontal) {
+          if (r.left < box.left - 1 || r.right > box.right + 1) return true;
+        } else {
+          const slack = Math.max(r.height - fontSize, 0) / 2;  // leading above and below the glyphs
+          if (r.top + slack < box.top - 1 || r.bottom - slack > box.bottom + 1) return true;
+        }
+      }
+    }
+    return false;
   }
 
   function hasOwnText(el) {
@@ -165,6 +222,57 @@
       tag: el.tagName.toLowerCase(),
       text: snippet(el),
     };
+  }
+
+  function isPinned(el) {
+    for (let node = el; node && node !== document.documentElement; node = node.parentElement) {
+      const position = getComputedStyle(node).position;
+      if (position === "fixed" || position === "sticky") return true;
+    }
+    return false;
+  }
+
+  function isAdornment(field, fieldRect, other, otherRect) {
+    if (!field.matches(TEXT_FIELD) || other.matches(TEXT_FIELD)) return false;
+    const w = Math.min(fieldRect.right, otherRect.right) - Math.max(fieldRect.left, otherRect.left);
+    const h = Math.min(fieldRect.bottom, otherRect.bottom) - Math.max(fieldRect.top, otherRect.top);
+    const area = otherRect.width * otherRect.height;
+    // Mostly inside the field and clearly smaller than it; focus rings often poke out a little.
+    return w > 0 && h > 0 && w * h >= 0.8 * area && area <= 0.5 * fieldRect.width * fieldRect.height;
+  }
+
+  function isOverlaidAction(small, smallRect, bigRect) {
+    const area = smallRect.width * smallRect.height;
+    if (!area || area * 3 > bigRect.width * bigRect.height) return false;
+    const w = Math.min(smallRect.right, bigRect.right) - Math.max(smallRect.left, bigRect.left);
+    const h = Math.min(smallRect.bottom, bigRect.bottom) - Math.max(smallRect.top, bigRect.top);
+    if (w <= 0 || h <= 0 || w * h < 0.95 * area) return false;
+    const cx = smallRect.left + smallRect.width / 2, cy = smallRect.top + smallRect.height / 2;
+    if (cx < 0 || cy < 0 || cx > window.innerWidth || cy > window.innerHeight) return true;  // cannot hit-test off screen
+    // An open modal layer switches pointer events off underneath it; nothing there can be hit-tested.
+    if (getComputedStyle(small).pointerEvents === "none") return true;
+    const top = document.elementFromPoint(cx, cy);
+    return !!top && (small === top || small.contains(top));
+  }
+
+  // The line boxes of an inline control that wraps; its bounding box also covers text it does not own.
+  function lineBoxes(el) {
+    if (getComputedStyle(el).display !== "inline") return null;
+    const rects = Array.from(el.getClientRects());
+    return rects.length > 1 ? rects : null;
+  }
+
+  // The button that turns optional cookies down in a consent banner, if one is showing.
+  function consentDecline() {
+    for (const el of document.querySelectorAll("button,[role=button],a[href]")) {
+      if (!isVisible(el)) continue;
+      const name = (accessibleName(el) || "").replace(/\s+/g, " ").trim();
+      if (!name || name.length > 60 || !CONSENT_DECLINE.test(name)) continue;
+      for (let node = el.parentElement, depth = 0; node && node !== document.body && depth < 8; node = node.parentElement, depth++) {
+        if (CONSENT_TOPIC.test(node.innerText || "")) return { selector: cssPath(el), label: name };
+      }
+    }
+    return null;
   }
 
   function rectOf(el) {
@@ -255,9 +363,10 @@
       const clipsY = style.overflowY === "hidden" || style.overflowY === "clip";
       const overX = el.scrollWidth > el.clientWidth + 1 && el.clientWidth > 0;
       const overY = el.scrollHeight > el.clientHeight + 1 && el.clientHeight > 0;
-      const clamped = style.textOverflow === "ellipsis" || (style.webkitLineClamp && style.webkitLineClamp !== "none");
+      const clamped = truncates(style);
       if ((clipsX && overX) || (clipsY && overY)) {
         if (clamped) continue;
+        if (!inkIsClipped(el, clipsX && overX)) continue;
         const axis = clipsX && overX ? `${el.scrollWidth - el.clientWidth}px horizontally` : `${el.scrollHeight - el.clientHeight}px vertically`;
         push(makeIssue("clipped-content", "P2", el, `Content is clipped by ${axis}: "${snippet(el)}"`));
       } else if (style.overflowX === "visible" && overX && hasOwnText(el) && style.display !== "inline") {
@@ -267,15 +376,36 @@
 
     // 4. Interactive controls: overlap, target size, accessible name.
     const controls = visible.filter((el) => el.matches(INTERACTIVE)).slice(0, 400);
-    const boxes = controls.map((el) => el.getBoundingClientRect());
+    // Overlap is judged on what is visible: a list scrolled under a footer does not cover it.
+    const boxes = controls.map(visibleRect);
+    const pinned = controls.map(isPinned);
+    const lines = controls.map(lineBoxes);
     for (let i = 0; i < controls.length; i++) {
       for (let j = i + 1; j < controls.length; j++) {
         const a = controls[i], b = controls[j];
         if (a.contains(b) || b.contains(a)) continue;
-        const ra = boxes[i], rb = boxes[j];
-        const w = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left);
-        const h = Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top);
+        // A fixed or sticky bar passes over scrolling content by design.
+        if (pinned[i] !== pinned[j]) continue;
+        let ra = boxes[i], rb = boxes[j];
+        // A button placed inside a text field (show password, clear search) is an adornment.
+        if (isAdornment(a, ra, b, rb) || isAdornment(b, rb, a, ra)) continue;
+        // A small action laid over a larger row (expand, favourite, remove) that stays on top.
+        if (isOverlaidAction(a, ra, rb) || isOverlaidAction(b, rb, ra)) continue;
+        let w = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left);
+        let h = Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top);
         if (w <= 0 || h <= 0) continue;
+        if (lines[i] || lines[j]) {
+          let best = null;
+          for (const fa of lines[i] || [ra]) {
+            for (const fb of lines[j] || [rb]) {
+              const fw = Math.min(fa.right, fb.right) - Math.max(fa.left, fb.left);
+              const fh = Math.min(fa.bottom, fb.bottom) - Math.max(fa.top, fb.top);
+              if (fw > 0 && fh > 0 && (!best || fw * fh > best.w * best.h)) best = { ra: fa, rb: fb, w: fw, h: fh };
+            }
+          }
+          if (!best) continue;
+          ({ ra, rb, w, h } = best);
+        }
         const ratio = (w * h) / Math.min(ra.width * ra.height, rb.width * rb.height);
         if (ratio < overlapThreshold) continue;
         if (a.closest(LAYER) !== b.closest(LAYER)) continue;
@@ -289,13 +419,38 @@
       }
     }
 
-    for (const el of controls) {
+    // WCAG 2.5.8: an undersized target still passes when a circle of the minimum size around
+    // its centre touches no other target and no other undersized target's circle.
+    const targets = controls.map((el) => {
       const r = el.getBoundingClientRect();
-      if (r.width >= minTarget && r.height >= minTarget) continue;
+      return { r, x: r.left + r.width / 2, y: r.top + r.height / 2, small: r.width < minTarget || r.height < minTarget };
+    });
+    const crowdedBy = (k) => {
+      const me = targets[k];
+      for (let m = 0; m < controls.length; m++) {
+        if (m === k || controls[k].contains(controls[m]) || controls[m].contains(controls[k])) continue;
+        if (pinned[m] !== pinned[k]) continue;  // a floating panel is not a neighbour of the page under it
+        const other = targets[m];
+        if (!other.r.width || !other.r.height) continue;
+        if (other.small) {
+          if (Math.hypot(me.x - other.x, me.y - other.y) < minTarget) return controls[m];
+        } else {
+          const dx = Math.max(other.r.left - me.x, 0, me.x - other.r.right);
+          const dy = Math.max(other.r.top - me.y, 0, me.y - other.r.bottom);
+          if (Math.hypot(dx, dy) < minTarget / 2) return controls[m];
+        }
+      }
+      return null;
+    };
+    for (let k = 0; k < controls.length; k++) {
+      const el = controls[k], r = targets[k].r;
+      if (!targets[k].small) continue;
       if (el.tagName === "A" && getComputedStyle(el).display === "inline" && el.parentElement && hasOwnText(el.parentElement)) continue;
       if (isScreenReaderOnly(el)) continue;
+      const neighbour = crowdedBy(k);
+      if (!neighbour) continue;
       push(makeIssue("small-target", vw < 768 ? "P2" : "P3", el,
-        `Target is ${Math.round(r.width)}×${Math.round(r.height)}px; minimum is ${minTarget}×${minTarget}px.`));
+        `Target is ${Math.round(r.width)}×${Math.round(r.height)}px, under ${minTarget}×${minTarget}px, and too close to "${accessibleName(neighbour).slice(0, 30) || neighbour.tagName.toLowerCase()}".`));
     }
 
     for (const el of controls) {
@@ -377,6 +532,26 @@
     return `${expanded}|${shown}`;
   }
 
+  // Identifies what a route renders, independent of its URL, so the audit can
+  // tell a not-found page or an alias from a page of its own.
+  function pageFingerprint() {
+    let text = document.body ? document.body.innerText : "";
+    const path = location.pathname;
+    if (path.length > 1) text = text.split(path).join("");
+    text = text.replace(/\s+/g, " ").trim();
+    const hashOf = (s) => {
+      let h = 0;
+      for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+      return h;
+    };
+    const visible = document.body ? Array.from(document.body.querySelectorAll("*")).filter(isVisible) : [];
+    // Same text in different markup (a button here, a link there) is a different page:
+    // its controls, styles and images can have defects of their own.
+    const structure = visible.map((el) => [el.tagName, el.getAttribute("class") || "", el.getAttribute("role") || "",
+      el.getAttribute("type") || "", el.getAttribute("src") || ""].join(" ")).join("\n");
+    return `${text.length}:${hashOf(text)}:${visible.length}:${hashOf(structure)}`;
+  }
+
   function isTriggerVisible(selector) {
     try {
       const el = document.querySelector(selector);
@@ -417,6 +592,6 @@
   }
 
   window.__uiAudit = {
-    probe, breakpoints, stateCandidates, domFingerprint, isTriggerVisible, annotate, clearAnnotations,
+    probe, breakpoints, stateCandidates, consentDecline, domFingerprint, pageFingerprint, isTriggerVisible, annotate, clearAnnotations,
   };
 })();
