@@ -81,20 +81,32 @@ def sweep(probe: Callable[[int], Signature], widths: list[int], refine: bool = T
         result.probes += 1
     if not refine:
         return result
-    refinements = 0
-    for low, high in zip(widths, widths[1:]):
-        if refinements >= max_refinements:
-            break
-        low_sig, high_sig = result.signatures[low], result.signatures[high]
-        if low_sig == high_sig:
-            continue
-        last_low, first_high, used = find_boundary(probe, low, high, low_sig, high_sig)
+    for low, high in refinement_order(widths, result.signatures, max_refinements):
+        last_low, first_high, used = find_boundary(probe, low, high, result.signatures[low], result.signatures[high])
         result.probes += used
-        refinements += 1
         for width in (last_low, first_high):
             if width not in result.anomalies:
                 result.anomalies.append(width)
     return result
+
+
+def refinement_order(widths: list[int], signatures: dict[int, Signature], budget: int) -> list[tuple[int, int]]:
+    """The neighbouring sweep widths whose signature changes that the budget is spent on, narrowest first.
+
+    A defect that flickers in and out at narrow widths must not use up the budget before a
+    boundary at wide widths is pinned: first every change that brings in or ends a defect no
+    earlier pick covers, then the remaining changes from narrow to wide."""
+    changes = [(low, high) for low, high in zip(widths, widths[1:]) if signatures[low] != signatures[high]]
+    covered: set[str] = set()
+    first, rest = [], []
+    for low, high in changes:
+        changed = signatures[low] ^ signatures[high]
+        if changed - covered:
+            first.append((low, high))
+            covered |= changed
+        else:
+            rest.append((low, high))
+    return sorted((first + rest)[:max(budget, 0)])
 
 
 @dataclass
