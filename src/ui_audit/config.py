@@ -19,6 +19,28 @@ STANDARD_VIEWPORTS: list[tuple[str, int, int]] = [
 
 DISCOVERY_METHODS = ("config", "source", "sitemap", "crawl")
 
+# Playwright's three engines. WebKit is the engine behind Safari.
+BROWSERS = ("chromium", "webkit", "firefox")
+BROWSER_ALIASES = {"chrome": "chromium", "safari": "webkit"}
+
+
+def parse_browsers(value) -> list[str]:
+    """`"chromium,safari"` or a list, as engine names in the given order without repeats."""
+    items = value.split(",") if isinstance(value, str) else list(value)
+    names: list[str] = []
+    for item in items:
+        name = str(item).strip().lower()
+        name = BROWSER_ALIASES.get(name, name)
+        if not name:
+            continue
+        if name not in BROWSERS:
+            raise ConfigError(f"unknown browser {item!r}; use {', '.join(BROWSERS)} (or safari for webkit)")
+        if name not in names:
+            names.append(name)
+    if not names:
+        raise ConfigError("name at least one browser")
+    return names
+
 
 @dataclass
 class RouteConfig:
@@ -78,6 +100,8 @@ class Config:
     annotate: bool = True
     storage_state: str = ""
     browser_path: str = ""
+    # Engines to audit in, the first one leading: route discovery and deduplication happen there.
+    browsers: list[str] = field(default_factory=lambda: ["chromium"])
     settle_ms: int = 150
     # Browser language, e.g. "de" or "fr-FR"; empty keeps Chromium's default (en-US).
     locale: str = ""
@@ -118,6 +142,7 @@ def from_dict(data: dict[str, Any]) -> Config:
     data = dict(data)
     sections = {name: data.pop(name, {}) for name in _SECTIONS}
     cfg = _build(Config, data, "top level")
+    cfg.browsers = parse_browsers(cfg.browsers)
     for name, cls in _SECTIONS.items():
         if not isinstance(sections[name], dict):
             raise ConfigError(f"[{name}] must be a table")
@@ -166,6 +191,8 @@ annotate = true
 storage_state = ""
 # Chromium executable; leave empty to use Playwright's own browser.
 browser_path = ""
+# Browsers to audit in: chromium, webkit (Safari's engine), firefox.
+browsers = ["chromium"]
 # Actions run on "/" before anything is measured and again on every page loaded.
 # setup = [{{ click = "#close-promo" }}]
 

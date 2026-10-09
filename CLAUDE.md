@@ -55,3 +55,4 @@ If Playwright's pinned Chromium is missing, `browser.launch()` falls back to any
 - Python 3.11+, standard library plus Playwright; Pillow only for optional pixel diffs.
 - Keep `probe.js` dependency-free and side-effect-free except `annotate`/`clearAnnotations`.
 - Tests: unit tests for pure logic, `@pytest.mark.e2e` for anything that needs Chromium.
+- Other browsers: `browsers` (default `["chromium"]`) adds WebKit and Firefox. Chromium keeps the plain keys in `coverage`, `rects` and screenshot names; other browsers append their name, so reports from before stay comparable. e2e tests for WebKit and Firefox skip where those browsers are not installed; CI installs them.

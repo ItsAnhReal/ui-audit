@@ -24,6 +24,9 @@
 
     "app.loading": "Loading…",
 
+    "browser.chromium": "Chromium",
+    "browser.firefox": "Firefox",
+    "browser.webkit": "Safari",
     "chart.aria": "Findings by width, {n} in total",
     "chart.breakpoint": "CSS breakpoint at {w}px",
     "chart.title": "Findings by width",
@@ -94,6 +97,8 @@
     "detail.noShots": "No screenshot of this page and state",
     "detail.onPages.one": "on {n} page",
     "detail.onPages.many": "on {n} pages",
+    "detail.onlyIn": "Only in {browsers}",
+    "detail.onlyIn.title": "The other browsers in this run did not show it. Safari means WebKit, the engine Safari is built on.",
     "detail.outside": "Not present at {w}px; it shows up at {range}.",
     "detail.page": "Page",
     "detail.pick.text": "Pick a finding on the left to see where it is, a screenshot and how to fix it.",
@@ -158,6 +163,7 @@
     "info.app": "App",
     "info.breakpoints": "CSS breakpoints",
     "info.browserDefault": "browser default",
+    "info.browsers": "Browsers",
     "info.consent": "Cookie banner closed",
     "info.coverage": "Coverage",
     "info.errors": "Errors during the run ({n})",
@@ -523,6 +529,9 @@
 
     "app.loading": "Wird geladen …",
 
+    "browser.chromium": "Chromium",
+    "browser.firefox": "Firefox",
+    "browser.webkit": "Safari",
     "chart.aria": "Befunde nach Breite, insgesamt {n}",
     "chart.breakpoint": "CSS-Breakpoint bei {w} px",
     "chart.title": "Befunde nach Breite",
@@ -593,6 +602,8 @@
     "detail.noShots": "Kein Screenshot von dieser Seite in diesem Zustand",
     "detail.onPages.one": "auf {n} Seite",
     "detail.onPages.many": "auf {n} Seiten",
+    "detail.onlyIn": "Nur in {browsers}",
+    "detail.onlyIn.title": "Die anderen Browser dieses Laufs zeigen das nicht. Safari steht für WebKit, die Engine hinter Safari.",
     "detail.outside": "Bei {w} px nicht vorhanden; der Befund tritt bei {range} auf.",
     "detail.page": "Seite",
     "detail.pick.text": "Wähle links einen Befund, um zu sehen, wo er ist, mit Screenshot und Lösungshinweis.",
@@ -657,6 +668,7 @@
     "info.app": "App",
     "info.breakpoints": "CSS-Breakpoints",
     "info.browserDefault": "Browser-Standard",
+    "info.browsers": "Browser",
     "info.consent": "Cookie-Banner geschlossen",
     "info.coverage": "Abdeckung",
     "info.errors": "Fehler während des Laufs ({n})",

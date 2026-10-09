@@ -25,7 +25,7 @@ Discover → Sweep → Capture → Diagnose → Map to code → Patch → Target
 ui-audit audit --base-url <url> --project-root . --output .ui-audit/baseline
 ```
 
-Read `.ui-audit/baseline/report.json` (source of truth) and skim `index.html`. Each issue has `severity`, `check`, `route`, `state`, `widths`, `selector`, `message`, `evidence` (screenshots) and `source_candidates`.
+Read `.ui-audit/baseline/report.json` (source of truth) and skim `index.html`. Each issue has `severity`, `check`, `route`, `state`, `widths`, `selector`, `message`, `evidence` (screenshots), `source_candidates` and `browsers`. If the user cares about Safari or Firefox, add `--browsers chromium,webkit,firefox`; a finding whose `browsers` leaves one out is specific to the others, so check the fix in those browsers too.
 
 ### 3. Semantic review (your judgement)
 

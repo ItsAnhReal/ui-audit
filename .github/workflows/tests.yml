@@ -17,5 +17,5 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[dev]"
-      - run: playwright install --with-deps chromium
+      - run: playwright install --with-deps chromium webkit firefox
       - run: pytest -q

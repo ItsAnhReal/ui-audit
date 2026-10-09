@@ -40,6 +40,17 @@ def signature(check: str, route: str, state: str, selector: str) -> str:
     return f"{check}|{route}|{state}|{selector}"
 
 
+def coverage_key(route: str, state: str, engine: str = "chromium") -> str:
+    """Where report.json's `coverage` keeps the widths probed for a route, state and browser.
+    Chromium keeps the plain key, so reports from before other browsers read the same."""
+    return f"{route}|{state}" if engine == "chromium" else f"{route}|{state}|{engine}"
+
+
+def rect_key(width: int, engine: str = "chromium") -> str:
+    """Key of an issue's box at a width in `rects`; boxes from other browsers than Chromium carry its name."""
+    return str(width) if engine == "chromium" else f"{width}@{engine}"
+
+
 def short_id(sig: str) -> str:
     return hashlib.sha1(sig.encode()).hexdigest()[:10]
 
@@ -66,7 +77,7 @@ class IssueSet:
         self._issues: dict[str, dict] = {}
         self._measured: dict[str, str] = {}
 
-    def observe(self, raw: dict, route: str, state: str, width: int) -> dict:
+    def observe(self, raw: dict, route: str, state: str, width: int, engine: str = "chromium") -> dict:
         sig = signature(raw["check"], route, state, raw["selector"])
         issue = self._issues.get(sig)
         if issue is None:
@@ -86,6 +97,9 @@ class IssueSet:
                 "evidence": [],
                 "source_candidates": [],
                 "also_in_states": [],
+                # The browsers it showed up in; the signature leaves the browser out, so one
+                # defect seen in several browsers stays one issue.
+                "browsers": [],
             }
             self._issues[sig] = issue
         measured = self._measured[sig] = worst(self._measured.get(sig, raw["severity"]), raw["severity"])
@@ -93,14 +107,18 @@ class IssueSet:
             issue["widths"].append(width)
             issue["widths"].sort()
         issue["severity"] = rated(issue["check"], measured, issue["widths"])
-        if raw.get("rect") and str(width) not in issue["rects"]:
-            issue["rects"][str(width)] = raw["rect"]
+        if engine not in issue["browsers"]:
+            issue["browsers"].append(engine)
+        key = rect_key(width, engine)
+        if raw.get("rect") and key not in issue["rects"]:
+            issue["rects"][key] = raw["rect"]
         return issue
 
-    def runtime(self, check: str, route: str, state: str, detail: str, width: int, hints: dict | None = None) -> dict:
+    def runtime(self, check: str, route: str, state: str, detail: str, width: int, hints: dict | None = None,
+                engine: str = "chromium") -> dict:
         severity = "P2"
         raw = {"check": check, "severity": severity, "selector": detail[:120], "message": detail, "hints": hints}
-        return self.observe(raw, route, state, width)
+        return self.observe(raw, route, state, width, engine)
 
     def all(self) -> list[dict]:
         """Aggregated issues. A defect that already shows in the default state is

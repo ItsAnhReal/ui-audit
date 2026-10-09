@@ -11,7 +11,7 @@ from importlib import resources
 from pathlib import Path
 
 from . import __version__
-from .config import CONFIG_FILENAME, ConfigError, from_dict, load, render_template
+from .config import CONFIG_FILENAME, ConfigError, from_dict, load, parse_browsers, render_template
 from .sources import SOURCE_EXTS
 
 SKILL_TARGETS = {
@@ -27,6 +27,13 @@ def _widths(text: str) -> list[int]:
         return sorted({int(part) for part in text.split(",") if part.strip()})
     except ValueError as exc:
         raise argparse.ArgumentTypeError("widths must be comma-separated integers, e.g. 390,768") from exc
+
+
+def _browsers(text: str) -> list[str]:
+    try:
+        return parse_browsers(text)
+    except ConfigError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def _load_config(args):
@@ -52,6 +59,8 @@ def _load_config(args):
         cfg.storage_state = args.storage_state
     if getattr(args, "locale", None):
         cfg.locale = args.locale
+    if getattr(args, "browsers", None):
+        cfg.browsers = args.browsers
     if getattr(args, "fast", False):
         cfg.states.sweep = "key"
     return cfg, path
@@ -100,11 +109,16 @@ def cmd_doctor(args) -> int:
         from .browser import launch
 
         with sync_playwright() as playwright:
-            browser = launch(playwright, cfg.browser_path)
-            report(True, "chromium launches", browser.version)
-            browser.close()
-    except Exception as exc:  # noqa: BLE001 - report any launch failure
-        report(False, "chromium launches", f"{str(exc).splitlines()[0]} (try `playwright install chromium` or --browser-path)")
+            for engine in cfg.browsers:
+                try:
+                    browser = launch(playwright, cfg.browser_path, engine=engine)
+                    report(True, f"{engine} launches", browser.version)
+                    browser.close()
+                except Exception as exc:  # noqa: BLE001 - report any launch failure
+                    hint = f"try `playwright install {engine}`" + (" or --browser-path" if engine == "chromium" else "")
+                    report(False, f"{engine} launches", f"{str(exc).splitlines()[0]} ({hint})")
+    except Exception as exc:  # noqa: BLE001 - Playwright itself is missing or broken
+        report(False, "playwright starts", str(exc).splitlines()[0])
     try:
         with urllib.request.urlopen(cfg.base_url, timeout=5) as response:  # noqa: S310 - local dev server
             report(response.status < 500, "app reachable", f"{cfg.base_url} ({response.status})")
@@ -267,6 +281,10 @@ def cmd_audit(args) -> int:
     print(f"{counts['P1']} P1 · {counts['P2']} P2 · {counts['P3']} P3 across {len(audited)} route(s), "
           f"{len(result['states'])} state(s), {len(result['captures'])} screenshot(s) ({megabytes:.1f} MB), "
           f"{result['stats']['probes']} probes in {result['stats']['seconds']}s")
+    if len(cfg.browsers) > 1:
+        only = [i for i in result["issues"] if not i.get("accepted") and len(i["browsers"]) < len(cfg.browsers)]
+        if only:
+            print(f"{len(only)} finding(s) show up in some browsers only; see browsers[] on each issue")
     groups = len(result.get("groups", []))
     if groups and groups < sum(counts.values()):
         print(f"{sum(counts.values())} findings come from {groups} distinct causes; see groups[] in report.json")
@@ -364,8 +382,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true")
     p.set_defaults(func=cmd_init)
 
-    p = sub.add_parser("doctor", help="check Python, Chromium, config, app and installed skills")
+    p = sub.add_parser("doctor", help="check Python, the browsers, config, app and installed skills")
     common(p, output=False)
+    p.add_argument("--browsers", type=_browsers, metavar="LIST", help="browsers to check (default: those in the config)")
     p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("audit", help="discover, sweep, capture and report")
@@ -386,6 +405,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="audit only routes that render a file changed since this git ref (needs a previous full audit)")
     p.add_argument("--baseline", help="the full audit --changed-since maps files with (default: the output directory)")
     p.add_argument("--locale", help='browser language for this run, e.g. "de"')
+    p.add_argument("--browsers", type=_browsers, metavar="LIST",
+                   help="browsers to audit in, e.g. chromium,webkit,firefox (webkit is Safari's engine; default chromium)")
     p.add_argument("--fast", action="store_true",
                    help="probe opened menus, tabs and dialogs only at key widths (same as [states] sweep = \"key\")")
     p.set_defaults(func=cmd_audit)

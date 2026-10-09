@@ -8,7 +8,7 @@ from datetime import date
 from importlib import resources
 from pathlib import Path
 
-from .issues import assign_groups, mark_accepted
+from .issues import assign_groups, mark_accepted, rect_key
 
 REPORT_JSON = "report.json"
 REPORT_HTML = "index.html"
@@ -44,8 +44,8 @@ def audited_routes(report: dict) -> list[dict]:
 
 # Fields the viewer reads. Rects and DOM hints stay in report.json only.
 _ISSUE_FIELDS = ("id", "group", "accepted", "check", "severity", "origin", "route", "state", "selector", "message", "widths",
-                 "evidence", "also_in_states")
-_REPORT_FIELDS = ("version", "created", "base_url", "project_root", "output_dir", "locale", "routes", "skipped_dynamic_routes",
+                 "evidence", "also_in_states", "browsers")
+_REPORT_FIELDS = ("version", "created", "base_url", "project_root", "output_dir", "locale", "browsers", "routes", "skipped_dynamic_routes",
                   "truncated_routes", "consent_dismissed", "states", "breakpoints", "captures", "errors", "stats", "only_routes")
 
 
@@ -59,7 +59,8 @@ def viewer_data(report: dict) -> dict:
     # Boxes for the screenshot viewer: only at widths that have a screenshot.
     shot_widths: dict[tuple[str, str], set[str]] = {}
     for capture in report.get("captures", []):
-        shot_widths.setdefault((capture["route"], capture["state"]), set()).add(str(capture["width"]))
+        shot_widths.setdefault((capture["route"], capture["state"]), set()).add(
+            rect_key(capture["width"], capture.get("browser", "chromium")))
     data["issues"] = [
         {**{key: issue[key] for key in _ISSUE_FIELDS if key in issue},
          "rects": {w: r for w, r in (issue.get("rects") or {}).items()
