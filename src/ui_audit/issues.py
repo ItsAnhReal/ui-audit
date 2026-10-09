@@ -70,6 +70,34 @@ def rated(check: str, measured: str, widths: list[int]) -> str:
     return measured
 
 
+# What changes between two runs of the same console error or failed request: query strings and
+# fragments (cache busters), content hashes in bundle names (index-a1b2c3.js, main.3f2a1b9c.css),
+# timestamps, UUIDs and long numbers (ids, columns in a minified bundle).
+_URL_TAIL = re.compile(r"((?:https?|wss?|file)://[^\s?#'\"()<>]*)[?#][^\s'\"()<>]*")
+_BUNDLE_HASH = re.compile(r"([\w.-]*?)[.-]([A-Za-z0-9_]{6,})(?=(?:\.chunk)?\.(?:m?js|cjs|css|map|wasm|woff2?|png|jpe?g|webp|avif|svg)\b)")
+_VOLATILE = [
+    (re.compile(r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?"), "<time>"),
+    (re.compile(r"\b\d{1,2}:\d{2}:\d{2}(?:\.\d+)?\b"), "<time>"),
+    (re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"), "<id>"),
+    (re.compile(r"\b(?=[0-9a-fA-F]*\d)(?=[0-9a-fA-F]*[a-fA-F])[0-9a-fA-F]{12,}\b"), "<id>"),
+    (re.compile(r"\d{5,}"), "<n>"),
+]
+
+
+def _hash_like(token: str) -> bool:
+    return bool(re.search(r"\d", token) or (re.search(r"[A-Z]", token) and re.search(r"[a-z]", token)))
+
+
+def runtime_key(detail: str) -> str:
+    """The part of a console error or failed request that identifies it across runs; the raw
+    text stays in the issue's message."""
+    text = _URL_TAIL.sub(r"\1", detail)
+    text = _BUNDLE_HASH.sub(lambda m: m.group(1) if _hash_like(m.group(2)) else m.group(0), text)
+    for pattern, placeholder in _VOLATILE:
+        text = pattern.sub(placeholder, text)
+    return text
+
+
 class IssueSet:
     """Accumulates observations into aggregated issues."""
 
@@ -122,7 +150,7 @@ class IssueSet:
     def runtime(self, check: str, route: str, state: str, detail: str, width: int, hints: dict | None = None,
                 engine: str = "chromium") -> dict:
         severity = "P2"
-        raw = {"check": check, "severity": severity, "selector": detail[:120], "message": detail, "hints": hints}
+        raw = {"check": check, "severity": severity, "selector": runtime_key(detail)[:120], "message": detail, "hints": hints}
         return self.observe(raw, route, state, width, engine)
 
     def all(self) -> list[dict]:
@@ -152,7 +180,7 @@ def _group_key(issue: dict) -> tuple[str, dict | None]:
     if check in OVERFLOW_CHECKS:
         check = "overflow"
     if check in ("console-error", "failed-resource"):
-        return f"{check}|{issue['message'].split('?')[0][:160]}", None
+        return f"{check}|{runtime_key(issue['message'])[:160]}", None
     top = (issue.get("source_candidates") or [None])[0]
     if top and top.get("line") and "runtime source" in top.get("reasons", []):
         return f"{check}|{top['file']}:{top['line']}", {"file": top["file"], "line": top["line"]}

@@ -70,3 +70,30 @@ def test_page_overflow_and_the_cut_off_edge_of_one_element_are_one_group():
                "selector": "div.tile", "message": "m", "widths": [320], "source_candidates": source}
               for n, check in enumerate(["horizontal-overflow", "offscreen-content", "offscreen-control"])]
     assert len(assign_groups(issues)) == 1
+
+
+def test_runtime_signatures_leave_out_what_changes_between_runs():
+    from ui_audit.issues import runtime_key
+
+    first = IssueSet().runtime("console-error", "/", "default",
+                               "TypeError: x is undefined at http://localhost:5173/assets/index-a1B2c3D4.js?v=17:1:23456", 390)
+    second = IssueSet().runtime("console-error", "/", "default",
+                                "TypeError: x is undefined at http://localhost:5173/assets/index-Zz9Yy8Xx.js?v=18:1:23999", 390)
+    assert first["signature"] == second["signature"] == "console-error|/|default|TypeError: x is undefined at http://localhost:5173/assets/index.js"
+    assert first["message"].endswith("index-a1B2c3D4.js?v=17:1:23456")  # the raw text stays readable
+    assert runtime_key("http://localhost:3000/api/cart?ts=1696851234567#top (404)") == "http://localhost:3000/api/cart (404)"
+    assert runtime_key("/static/js/main.3f2a1b9c.chunk.js (net::ERR_FAILED)") == "/static/js/main.chunk.js (net::ERR_FAILED)"
+    assert runtime_key("Request 550e8400-e29b-41d4-a716-446655440000 at 2026-10-09T12:34:56.789Z, order 1234567") == \
+        "Request <id> at <time>, order <n>"
+    # Plain words, small numbers and status codes are what tells errors apart; they stay.
+    assert runtime_key("Failed to load bootstrap.bundle.js: 404 at line 42") == "Failed to load bootstrap.bundle.js: 404 at line 42"
+
+
+def test_auto_state_ids_leave_out_counts():
+    from ui_audit.states import auto_state_id
+
+    assert auto_state_id("expand", "Cart (3)") == auto_state_id("expand", "Cart (12)") == "expand-cart"
+    assert auto_state_id("popup", "3 new  messages") == "popup-new-messages"
+    assert auto_state_id("expand", "12") == "expand-expand"
+    # Two triggers that read the same are told apart by their selector, not by discovery order.
+    assert auto_state_id("expand", "More", "nav > button.more:nth-of-type(2)") == "expand-more-button-more"

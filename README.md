@@ -66,7 +66,7 @@ ui-audit verify .ui-audit/baseline .ui-audit/fix-1 --pixel-diff
 
 To re-check with the settings an earlier run used (app address, sign-in, language, setup), add `--like .ui-audit/baseline`; options you pass override them, and without `--output` the run goes to `.ui-audit/baseline-again`. The re-check commands in fix prompts use it.
 
-`verify` reports **fixed**, **introduced** and **persistent** issues. A baseline issue only counts as fixed if the new run probed its route, state and at least one of its widths; everything else is counted as out of scope. Agent findings only count as fixed after a new semantic review. Exit code 1 means a P1/P2 issue was introduced (`--strict` also fails on persistent ones).
+`verify` reports **fixed**, **introduced** and **persistent** issues. A baseline issue only counts as fixed if the new run probed its route, state and at least one of its widths, and its check reported everything it found there (each check reports at most `max_issues_per_check` findings per width, and the control checks look at the first 400 controls; `coverage_truncated` in report.json records where that cut in). Everything else is counted as out of scope. New issues on a route or state the baseline did not audit are listed as **new scope**, not introduced. Agent findings only count as fixed after a new semantic review. Exit code 1 means a P1/P2 issue was introduced (`--strict` also fails on persistent ones); `ui-audit ci` also counts new-scope issues as new in the change.
 
 ### Agent skill
 

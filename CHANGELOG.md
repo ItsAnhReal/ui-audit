@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Changed issue signatures** — compare against a fresh baseline after upgrading. Selectors leave out generated class names and ids (CSS Modules, styled-components, emotion, Svelte, styled-jsx, React `useId`, Radix), prefer `data-testid`/`data-test`/`data-cy`, stable ids and a control's role and `aria-label`, and are as short as is unique on the page. Discovered state ids leave out counts ("Cart (3)" is `expand-cart`), and console errors and failed requests are identified without query strings, bundle hashes, timestamps and ids (the message keeps the raw text).
+- `verify` no longer counts a finding as fixed where its check hit `max_issues_per_check` or the 400-control limit (recorded in report.json as `coverage_truncated`), and lists findings on routes or states the baseline did not audit as `new_scope` instead of introduced. Out-of-range numbers in `ui-audit.toml` are config errors, and a configured `0` (e.g. `min_target_size = 0`) is no longer replaced by the default.
+
 ## 0.1.0 — first public release
 
 - `ui-audit audit`: route discovery (config, framework conventions, sitemap, crawl), conservative state discovery, a full width sweep with boundary refinement, bounded screenshots, findings grouped by cause, source hints, and a content check for pages that measure clean for the wrong reason.

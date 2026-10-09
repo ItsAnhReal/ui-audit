@@ -23,6 +23,7 @@ from pathlib import Path
 
 from . import report as report_mod
 from . import verify
+from .issues import SEVERITY_ORDER
 
 MARKER = "<!-- ui-audit-ci -->"
 LIST_LIMIT = 15
@@ -174,6 +175,12 @@ def _open(issues: list[dict]) -> list[dict]:
     return [i for i in issues if not i.get("accepted")]
 
 
+def _new(comparison: dict) -> list[dict]:
+    """What the change brought. A route or state the base commit did not have (verify's
+    `new_scope`) is part of the change too, so it counts here as it did before."""
+    return sorted(comparison["introduced"] + comparison.get("new_scope", []), key=lambda i: SEVERITY_ORDER.get(i["severity"], 9))
+
+
 def _where(issue: dict) -> str:
     widths = issue.get("widths") or []
     span = f"{widths[0]}–{widths[-1]}px" if len(widths) > 1 else (f"{widths[0]}px" if widths else "")
@@ -218,7 +225,7 @@ def render_summary(current: dict | None, comparison: dict | None = None, *, base
     issues = _open(current["issues"])
     routes = report_mod.audited_routes(current)
     if comparison is not None:
-        new, fixed, still = comparison["introduced"], comparison["fixed"], comparison["persistent"]
+        new, fixed, still = _new(comparison), comparison["fixed"], comparison["persistent"]
         mark = "❌" if blocking else ("⚠️" if new else "✅")
         if new:
             head = f"{mark} ui-audit: {len(new)} new responsive problem{'s' if len(new) != 1 else ''} in this change"
@@ -339,7 +346,7 @@ def is_blocking(fail_on: str, current: dict | None, comparison: dict | None) -> 
     if current is None or fail_on == "never":
         return False
     if fail_on == "new":
-        return bool(comparison) and any(i["severity"] in ("P1", "P2") for i in comparison["introduced"])
+        return bool(comparison) and any(i["severity"] in ("P1", "P2") for i in _new(comparison))
     levels = {"P1": ("P1",), "P2": ("P1", "P2"), "P3": ("P1", "P2", "P3")}[fail_on]
     return any(i["severity"] in levels for i in _open(current["issues"]))
 
@@ -436,7 +443,7 @@ def run(args) -> int:
     _set_outputs({
         "report-dir": str(head_dir), "summary-file": str(out / "summary.md"),
         "p1": counts["P1"], "p2": counts["P2"], "p3": counts["P3"],
-        "introduced": len(comparison["introduced"]) if comparison else "",
+        "introduced": len(_new(comparison)) if comparison else "",
         "fixed": len(comparison["fixed"]) if comparison else "",
         "blocking": str(blocking).lower(),
     })

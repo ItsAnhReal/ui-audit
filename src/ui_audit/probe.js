@@ -46,39 +46,96 @@
     return style.clip === "rect(0px, 0px, 0px, 0px)" || style.clipPath === "inset(50%)";
   }
 
+  // Build tools add classes and ids that change with every build or render: CSS Modules
+  // (card_x7Yz2, Home_main__nLjiQ, _3kd9A), styled-components (sc-…, kCQjZg), emotion (css-1x2y3z),
+  // Svelte (svelte-1abc), styled-jsx (jsx-123), React's useId (:r1:). A selector built from them
+  // changes the issue's signature on every build.
+  const GENERATED_CLASS = /^(sc-|css-|svelte-|jsx-\d|ng-tns-)/;
+  const GENERATED_ID = /^(radix-|headlessui-|react-aria|mui-|ember\d|yui_|uid-)|:|^\d|\d{4,}/;
+  const TEST_ATTRS = ["data-testid", "data-test", "data-cy"];
+  const MAX_DEPTH = 8;
+
+  function looksRandom(token) {
+    if (token.length < 5) return false;
+    // Letters and digits alternating three times or more: x7Yz2, a1b2c3, 3kd9A.
+    if (/^[A-Za-z0-9]+$/.test(token) && (token.match(/[A-Za-z](?=\d)|\d(?=[A-Za-z])/g) || []).length >= 3) return true;
+    // Mixed case that is not camelCase: kCQjZg, nLjiQ (navBar and myButton are camelCase).
+    return token.length <= 8 && /^[A-Za-z]+$/.test(token) && /[A-Z]/.test(token) && /[a-z]/.test(token)
+      && !/^[A-Za-z][a-z]*([A-Z][a-z]+)*$/.test(token);
+  }
+
+  function isGeneratedClass(c) {
+    return GENERATED_CLASS.test(c) || c.startsWith("_") || c.split(/_+|-+/).some(looksRandom);
+  }
+
   function stableClasses(el) {
     return Array.from(el.classList)
-      .filter((c) => c.length <= 30 && !/[:\[\]\/.@%]/.test(c))
+      .filter((c) => c.length <= 30 && !/[:\[\]\/.@%]/.test(c) && !isGeneratedClass(c))
       .slice(0, 2);
   }
 
-  function cssPath(el) {
-    if (el.id && document.querySelectorAll(`#${CSS.escape(el.id)}`).length === 1) {
-      return `#${CSS.escape(el.id)}`;
+  function stableId(el) {
+    const id = el.id;
+    return id && id.length <= 40 && !GENERATED_ID.test(id) && !id.split(/[-_]+/).some(looksRandom) ? id : null;
+  }
+
+  const attr = (name, value) => `[${name}="${value.replace(/["\\]/g, "\\$&")}"]`;
+
+  function unique(selector, el) {
+    try {
+      const found = document.querySelectorAll(selector);
+      return found.length === 1 && found[0] === el;
+    } catch (e) {
+      return false;
     }
+  }
+
+  // One step of a path: a test id or id that is unique by itself, or the tag with role and
+  // label (controls only, labels without counts in them), stable classes, and nth-of-type
+  // when a sibling would match too.
+  function pathPart(node) {
+    for (const name of TEST_ATTRS) {
+      const value = node.getAttribute(name);
+      if (value && unique(attr(name, value), node)) return { part: attr(name, value), anchor: true };
+    }
+    const id = stableId(node);
+    if (id && unique(`#${CSS.escape(id)}`, node)) return { part: `#${CSS.escape(id)}`, anchor: true };
+    let part = node.tagName.toLowerCase();
+    if (node.matches(INTERACTIVE)) {
+      const role = node.getAttribute("role");
+      const label = node.getAttribute("aria-label") || "";
+      if (role && /^[a-z]+$/.test(role)) part += `[role=${role}]`;
+      if (label.trim() && label.length <= 60 && !/[\d\n]/.test(label)) part += attr("aria-label", label);
+    }
+    part += stableClasses(node).map((c) => `.${CSS.escape(c)}`).join("");
+    const parent = node.parentElement;
+    if (parent) {
+      const same = Array.from(parent.children).filter((c) => c.tagName === node.tagName);
+      if (same.some((c) => c !== node && c.matches(part))) part += `:nth-of-type(${same.indexOf(node) + 1})`;
+    }
+    return { part, anchor: false };
+  }
+
+  // The shortest path up from el that is unique on the page, so it stays the same across
+  // builds and annotate() marks the right element. probe() caches it per element.
+  let pathCache = null;
+  function cssPath(el) {
+    if (pathCache && pathCache.has(el)) return pathCache.get(el);
     const parts = [];
     let node = el;
-    while (node && node.nodeType === 1 && parts.length < 5) {
+    while (node && node.nodeType === 1 && parts.length < MAX_DEPTH) {
       if (node === document.body || node === document.documentElement) {
         parts.unshift(node.tagName.toLowerCase());
         break;
       }
-      if (node.id && document.querySelectorAll(`#${CSS.escape(node.id)}`).length === 1) {
-        parts.unshift(`#${CSS.escape(node.id)}`);
-        break;
-      }
-      let part = node.tagName.toLowerCase();
-      const classes = stableClasses(node);
-      if (classes.length) part += classes.map((c) => `.${CSS.escape(c)}`).join("");
-      const parent = node.parentElement;
-      if (parent) {
-        const same = Array.from(parent.children).filter((c) => c.tagName === node.tagName);
-        if (same.length > 1) part += `:nth-of-type(${same.indexOf(node) + 1})`;
-      }
+      const { part, anchor } = pathPart(node);
       parts.unshift(part);
+      if (anchor || unique(parts.join(" > "), el)) break;
       node = node.parentElement;
     }
-    return parts.join(" > ");
+    const path = parts.join(" > ");
+    if (pathCache) pathCache.set(el, path);
+    return path;
   }
 
   // The first visible text that runs past the viewport's right edge with nothing clipping it.
@@ -366,6 +423,9 @@
   // Up to this many pixels past the edge is a nuisance (a page that wiggles sideways), not
   // lost content, and is rated one step lower.
   const SMALL_OVERFLOW = 4;
+  // The pairwise control checks are quadratic, so only this many controls are looked at.
+  const MAX_CONTROLS = 400;
+  const CONTROL_CHECKS = ["overlapping-controls", "small-target", "unnamed-control"];
 
   // The grid whose columns are wider than its own box. Items placed in those columns
   // overflow because of the column sizes, so the grid is what to report and fix.
@@ -387,11 +447,21 @@
   }
 
   function probe(opts) {
+    pathCache = new Map();
+    try {
+      return measure(opts);
+    } finally {
+      pathCache = null;
+    }
+  }
+
+  function measure(opts) {
     opts = opts || {};
     const ignore = opts.ignoreSelectors || [];
-    const minTarget = opts.minTarget || 24;
-    const overlapThreshold = opts.overlapThreshold || 0.2;
-    const maxPer = opts.maxPerCheck || 15;
+    // ?? rather than ||: a configured 0 means 0.
+    const minTarget = opts.minTarget ?? 24;
+    const overlapThreshold = opts.overlapThreshold ?? 0.2;
+    const maxPer = opts.maxPerCheck ?? 15;
     const vw = document.documentElement.clientWidth || window.innerWidth;
     const issues = [];
     const counts = {};
@@ -521,7 +591,8 @@
     }
 
     // 4. Interactive controls: overlap, target size, accessible name.
-    const controls = visible.filter((el) => el.matches(INTERACTIVE)).slice(0, 400);
+    const allControls = visible.filter((el) => el.matches(INTERACTIVE));
+    const controls = allControls.slice(0, MAX_CONTROLS);
     // Overlap is judged on what is visible: a list scrolled under a footer does not cover it.
     const boxes = controls.map(visibleRect);
     const pinned = controls.map(pinnedLayer);
@@ -607,12 +678,18 @@
       push(makeIssue("unnamed-control", "P2", el, `${el.tagName.toLowerCase()} has no accessible name.`));
     }
 
+    // Checks that did not report everything they found, or did not look at every control:
+    // check name → findings counted. verify does not count their findings as fixed here.
+    const truncated = Object.fromEntries(Object.entries(counts).filter(([, n]) => n > maxPer));
+    if (allControls.length > controls.length) {
+      for (const check of CONTROL_CHECKS) truncated[check] = counts[check] || 0;
+    }
     return {
       viewport: { width: vw, height: window.innerHeight },
       scrollWidth,
       scrollHeight: document.documentElement.scrollHeight,
       issues,
-      truncated: Object.fromEntries(Object.entries(counts).filter(([, n]) => n > maxPer)),
+      truncated,
     };
   }
 

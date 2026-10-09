@@ -68,6 +68,15 @@ def test_blocking():
     assert not ci.is_blocking("P3", report(issue(".a", accepted={"reason": "ok"})), None)
 
 
+def test_a_route_the_base_commit_did_not_have_is_new_in_this_change():
+    head = report(issue(".a", "P2", route="/added"))
+    head["coverage"]["/added|default"] = [800]
+    result = compare(report(), head)
+    assert result["introduced"] == [] and len(result["new_scope"]) == 1
+    assert ci.is_blocking("new", head, result)
+    assert "1 new responsive problem in this change" in ci.render_summary(head, result)
+
+
 def test_comment_is_updated_instead_of_repeated(monkeypatch):
     calls = []
 
