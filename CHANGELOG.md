@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- For agents: `audit --json` and `verify --json` print a compact summary (a few KB instead of the whole report.json), and `ui-audit show <run> [--group ID | --issue ID]` lists causes or one cause in full with its re-check command. `ui-audit mcp` serves `audit`, `verify`, `list_findings`, `get_screenshot` and `accept` to MCP clients (Claude Desktop, Cursor).
+- The skill covers `--fast`, `--like`, `--changed-since`, `accept`, groups and exit codes, and makes the screenshot review optional; `install-skill --target agents` writes `.agents/skills/ui-audit`, and `init` suggests lines for `AGENTS.md`.
+
 ## 0.1.0 — first public release
 
 - `ui-audit audit`: route discovery (config, framework conventions, sitemap, crawl), conservative state discovery, a full width sweep with boundary refinement, bounded screenshots, findings grouped by cause, source hints, and a content check for pages that measure clean for the wrong reason.

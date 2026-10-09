@@ -22,7 +22,7 @@ If Playwright's pinned Chromium is missing, `browser.launch()` falls back to any
 
 | Module | Responsibility |
 |---|---|
-| `cli.py` | argparse commands: `init`, `doctor`, `audit`, `login`, `accept`, `report`, `ui`, `merge-findings`, `verify`, `install-skill`, `ci` |
+| `cli.py` | argparse commands: `init`, `doctor`, `audit`, `login`, `accept`, `report`, `ui`, `merge-findings`, `verify`, `show`, `mcp`, `install-skill`, `ci`; `--json` on `audit`/`verify` |
 | `config.py` | dataclass config, `ui-audit.toml` loading (unknown keys are errors), template |
 | `audit.py` | the pipeline: routes → states → sweep → captures → source hints → reports |
 | `probe.js` | injected as an init script; all in-page measurement, state candidates, annotations |
@@ -34,6 +34,7 @@ If Playwright's pinned Chromium is missing, `browser.launch()` falls back to any
 | `report.py`, `semantic.py`, `verify.py` | report.json/index.html, agent review packet + merge, baseline comparison |
 | `ui/` | the viewer and app front end (`index.html`, `app.css`, `i18n.js`, `app.js`); `report.py` assembles them into one page, with report data inlined (static `index.html`) or an app token (`ui-audit ui`) |
 | `server.py` | `ui-audit ui`: stdlib HTTP server on 127.0.0.1, run list, job queue, accept/re-check/compare API |
+| `summary.py`, `mcp_server.py` | compact views of a run for agents (`--json`, `show`); `ui-audit mcp`, a stdlib MCP server over stdio (stdout carries protocol messages only) |
 | `runner.py` | one audit in a subprocess for the app: JSON spec on stdin, JSON-line progress events on stdout |
 | `ci.py`, `action.yml` | `ui-audit ci` (start the app per checkout, audit head and base commit, verify, Markdown summary, sticky PR comment) and the composite GitHub Action that wraps it; `.github/workflows/action.yml` runs the action against `demo/` |
 | `skill/SKILL.md` | the shared agent skill shipped with the package |

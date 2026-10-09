@@ -19,7 +19,15 @@ SKILL_TARGETS = {
     ("project", "codex"): Path(".codex/skills/ui-audit"),
     ("user", "claude"): Path("~/.claude/skills/ui-audit"),
     ("user", "codex"): Path("~/.codex/skills/ui-audit"),
+    # The shared folder other agents read skills from (Cursor, Gemini CLI, OpenCode and more).
+    ("project", "agents"): Path(".agents/skills/ui-audit"),
+    ("user", "agents"): Path("~/.agents/skills/ui-audit"),
 }
+SKILL_AGENTS = {"both": ["claude", "codex"], "all": ["claude", "codex", "agents"]}
+AGENTS_MD_SNIPPET = """\
+## UI checks
+After UI changes run `ui-audit audit <url> --json` and read `ui-audit show <run> --group <id> --json`, not report.json.
+Prove fixes with `ui-audit verify <baseline> <rerun>`; the full loop is in the ui-audit skill (`ui-audit install-skill`)."""
 
 
 def _widths(text: str) -> list[int]:
@@ -84,6 +92,8 @@ def cmd_init(args) -> int:
         with gitignore.open("a", encoding="utf-8") as handle:
             handle.write("\n.ui-audit/\n")
         print("added .ui-audit/ to .gitignore")
+    print("\nFor coding agents, consider adding to AGENTS.md (or CLAUDE.md):\n")
+    print(AGENTS_MD_SNIPPET)
     return 0
 
 
@@ -276,6 +286,7 @@ def cmd_audit(args) -> int:
 
     counts = result["stats"]["issues"]
     out = Path(cfg.output)
+    args.run_dir = out  # for --json
     audited = report_mod.audited_routes(result)
     megabytes = result["stats"]["screenshot_bytes"] / 1_000_000
     print(f"{counts['P1']} P1 · {counts['P2']} P2 · {counts['P3']} P3 across {len(audited)} route(s), "
@@ -351,7 +362,7 @@ def cmd_verify(args) -> int:
 
 def cmd_install_skill(args) -> int:
     source = resources.files("ui_audit").joinpath("skill/SKILL.md")
-    agents = ["claude", "codex"] if args.agent == "both" else [args.agent]
+    agents = SKILL_AGENTS.get(args.agent, [args.agent])
     for agent in agents:
         target = SKILL_TARGETS[(args.scope, agent)].expanduser()
         if args.scope == "project":
@@ -361,6 +372,66 @@ def cmd_install_skill(args) -> int:
             shutil.copyfile(path, target / "SKILL.md")
         print(f"installed {agent} skill: {target / 'SKILL.md'}")
     return 0
+
+
+def _print_json(data) -> None:
+    print(json.dumps(data, ensure_ascii=False, separators=(",", ":")))
+
+
+def cmd_show(args) -> int:
+    from . import report as report_mod
+    from . import summary
+
+    run_dir = Path(args.run_dir)
+    if not (run_dir / report_mod.REPORT_JSON).is_file():
+        print(f"no report.json in {run_dir}", file=sys.stderr)
+        return 2
+    report = report_mod.read_json(run_dir)
+    ident = args.group or args.issue
+    if ident:
+        try:
+            data = summary.detail(report, run_dir, ident)
+        except LookupError as exc:
+            print(exc, file=sys.stderr)
+            return 2
+        render = summary.render_detail
+    else:
+        data, render = summary.summary(report, run_dir), summary.render_summary
+    if args.json:
+        _print_json(data)
+    else:
+        print(render(data), end="")
+    return 0
+
+
+def cmd_mcp(args) -> int:
+    from .mcp_server import serve
+
+    return serve()
+
+
+def _with_json(args) -> int:
+    """Run audit or verify with their usual output moved to stderr, then print the compact
+    JSON on stdout: what an agent reads instead of report.json."""
+    import contextlib
+
+    from . import report as report_mod
+    from . import summary
+
+    with contextlib.redirect_stdout(sys.stderr):
+        code = args.func(args)
+    if args.command == "verify":
+        out_dir = Path(args.output) if args.output else Path(args.current)
+        verify_json = out_dir / "verify.json"
+        data = summary.verify_summary(json.loads(verify_json.read_text(encoding="utf-8"))) if verify_json.is_file() else {}
+    else:
+        run_dir = getattr(args, "run_dir", None)
+        if run_dir is not None and (Path(run_dir) / report_mod.REPORT_JSON).is_file():
+            data = summary.summary(report_mod.read_json(Path(run_dir)), Path(run_dir))
+        else:  # stopped before auditing: a config error, or --changed-since found nothing to do
+            data = {"report": None}
+    _print_json({**data, "exit_code": code})
+    return code
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -409,6 +480,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="browsers to audit in, e.g. chromium,webkit,firefox (webkit is Safari's engine; default chromium)")
     p.add_argument("--fast", action="store_true",
                    help="probe opened menus, tabs and dialogs only at key widths (same as [states] sweep = \"key\")")
+    p.add_argument("--json", action="store_true", help="print a compact JSON summary on stdout (the usual output goes to stderr)")
     p.set_defaults(func=cmd_audit)
 
     p = sub.add_parser("accept", help="mark findings as intentional so later audits stop counting them")
@@ -448,10 +520,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output", help="where to write verify.json/verify.md (default: current dir)")
     p.add_argument("--pixel-diff", action="store_true", help="also compute per-screenshot pixel diffs")
     p.add_argument("--strict", action="store_true", help="also fail on persistent P1/P2 issues")
+    p.add_argument("--json", action="store_true", help="print fixed/introduced/persistent as compact JSON on stdout")
     p.set_defaults(func=cmd_verify)
 
+    p = sub.add_parser("show", help="a run in brief, or one cause or finding in full (for agents)")
+    p.add_argument("run_dir", nargs="?", default=".ui-audit/latest")
+    which = p.add_mutually_exclusive_group()
+    which.add_argument("--group", metavar="ID", help="every finding of this cause, with sources, screenshots and commands")
+    which.add_argument("--issue", metavar="ID", help="one finding in full")
+    p.add_argument("--json", action="store_true", help="print JSON instead of text")
+    p.set_defaults(func=cmd_show)
+
+    p = sub.add_parser("mcp", help="serve the audit tools to MCP clients over stdio (Claude Desktop, Cursor, ...)")
+    p.set_defaults(func=cmd_mcp)
+
     p = sub.add_parser("install-skill", help="install the shared agent skill")
-    p.add_argument("--agent", choices=["claude", "codex", "both"], default="both")
+    p.add_argument("--agent", "--target", dest="agent", choices=["claude", "codex", "agents", "both", "all"], default="both",
+                   help="claude, codex, agents (.agents/skills, read by Cursor and others), both (claude and codex) or all")
     p.add_argument("--scope", choices=["project", "user"], default="project")
     p.add_argument("--project-root")
     p.set_defaults(func=cmd_install_skill)
@@ -467,4 +552,6 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if getattr(args, "base_url_pos", None) and not args.base_url:
         args.base_url = args.base_url_pos
+    if getattr(args, "json", False) and args.command in ("audit", "verify"):
+        return _with_json(args)
     return args.func(args)
