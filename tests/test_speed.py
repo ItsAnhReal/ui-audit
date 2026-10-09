@@ -72,3 +72,40 @@ def test_blocked_trackers_are_not_failed_resources(demo_site, tmp_path):
 
     assert failed(["trackers", "tracker.test"]) == []
     assert any("pixel.tracker.test" in m for m in failed([]))
+
+
+def test_a_state_found_at_the_narrowest_width_is_not_loaded_twice(monkeypatch):
+    from ui_audit import states
+
+    loads = []
+    monkeypatch.setattr(states, "open_page", lambda page, cfg, route, width, height: loads.append(width))
+    monkeypatch.setattr(states.browser, "settle", lambda *args: None)
+
+    class Page:
+        url = "http://x/"
+        shown_from = 320
+
+        def __init__(self):
+            self.width = 0
+
+        def evaluate(self, script, arg=None):
+            return self.width >= self.shown_from
+
+    def resize(page, width, height, settle_ms):
+        page.width = width
+
+    monkeypatch.setattr(states.browser, "resize", resize)
+    cfg = from_dict({})
+    state = states.State(id="menu", route="/", kind="auto", label="menu", trigger="#m", actions=[])
+    page = Page()
+    first, loaded = states.first_width(page, cfg, state, [320, 400, 480])
+    assert (first, loaded) == (320, True)
+    assert states.apply(page, cfg, state, first, 900, loaded) and loads == [320]
+    # Shown only from a wider width: loaded at 320 and resized is not loaded there, so load again.
+    page, loads[:] = Page(), []
+    page.shown_from = 400
+    first, loaded = states.first_width(page, cfg, state, [320, 400, 480])
+    assert (first, loaded) == (400, False)
+    assert states.apply(page, cfg, state, first, 900, loaded) and loads == [320, 400]
+    # A state without a trigger is loaded by apply.
+    assert states.first_width(page, cfg, states.default_state("/"), [320, 400]) == (320, False)

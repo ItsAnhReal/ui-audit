@@ -256,12 +256,14 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                         finish(record, path, "skipped: no widths in range")
                         continue
 
-                    first = states.first_width(page, cfg, state, probe_widths)
+                    runtime.clear()
+                    first, loaded = states.first_width(page, cfg, state, probe_widths)
                     if first is None:
                         finish(record, path, "skipped: its control is not shown at any width")
                         continue
-                    runtime.clear()
-                    if not states.apply(page, cfg, state, first, viewports.height_for(first)):
+                    if not loaded:
+                        runtime.clear()
+                    if not states.apply(page, cfg, state, first, viewports.height_for(first), loaded):
                         finish(record, path, "skipped: could not be applied")
                         continue
                     if state.kind != "default":
