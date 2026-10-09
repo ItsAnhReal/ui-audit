@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import re
+from datetime import date
 from importlib import resources
 from pathlib import Path
 
-from .issues import assign_groups
+from .issues import assign_groups, mark_accepted
 
 REPORT_JSON = "report.json"
 REPORT_HTML = "index.html"
@@ -41,15 +43,19 @@ def audited_routes(report: dict) -> list[dict]:
 
 
 # Fields the viewer reads. Rects and DOM hints stay in report.json only.
-_ISSUE_FIELDS = ("id", "group", "accepted", "check", "severity", "origin", "route", "state", "selector", "message", "widths", "evidence")
+_ISSUE_FIELDS = ("id", "group", "accepted", "check", "severity", "origin", "route", "state", "selector", "message", "widths",
+                 "evidence", "also_in_states")
 _REPORT_FIELDS = ("version", "created", "base_url", "project_root", "output_dir", "locale", "routes", "skipped_dynamic_routes",
-                  "truncated_routes", "consent_dismissed", "states", "breakpoints", "captures", "errors", "stats")
+                  "truncated_routes", "consent_dismissed", "states", "breakpoints", "captures", "errors", "stats", "only_routes")
 
 
-def _viewer_data(report: dict) -> dict:
+def viewer_data(report: dict) -> dict:
     data = {key: report[key] for key in _REPORT_FIELDS if key in report}
-    assign_groups(report["issues"])  # reports written before grouping existed get it here
-    data["config"] = {"viewports": (report.get("config") or {}).get("viewports", {})}
+    groups = assign_groups(report["issues"])  # reports written before grouping existed get it here
+    data["groups"] = [{key: g[key] for key in ("id", "check", "severity", "source", "count", "routes")} for g in groups]
+    config = report.get("config") or {}
+    data["config"] = {"viewports": config.get("viewports", {}), "sweep": (config.get("states") or {}).get("sweep", "full"),
+                      "signed_in": bool(config.get("storage_state"))}
     # Boxes for the screenshot viewer: only at widths that have a screenshot.
     shot_widths: dict[tuple[str, str], set[str]] = {}
     for capture in report.get("captures", []):
@@ -58,17 +64,95 @@ def _viewer_data(report: dict) -> dict:
         {**{key: issue[key] for key in _ISSUE_FIELDS if key in issue},
          "rects": {w: r for w, r in (issue.get("rects") or {}).items()
                    if w in shot_widths.get((issue["route"], issue["state"]), ())},
-         "source_candidates": [{"file": c["file"], "line": c.get("line")} for c in issue.get("source_candidates", [])[:2]]}
+         "source_candidates": [{"file": c["file"], "line": c.get("line"), "reasons": c.get("reasons", [])[:3]}
+                               for c in issue.get("source_candidates", [])[:3]]}
         for issue in report["issues"]
     ]
     return data
 
 
+def page(report: dict | None = None, app: dict | None = None) -> str:
+    """The viewer as one self-contained page. Given report data it is the static report a
+    run leaves behind; given app settings it is `ui-audit ui`, which loads runs from its server."""
+    ui = resources.files("ui_audit").joinpath("ui")
+
+    def inline(value) -> str:
+        # "</" would end the data block early; "<\\/" is the same string to JSON.
+        return json.dumps(value, ensure_ascii=False).replace("</", "<\\/")
+
+    parts = {
+        "/*__STYLE__*/": ui.joinpath("app.css").read_text(encoding="utf-8"),
+        "/*__SCRIPT__*/": ui.joinpath("i18n.js").read_text(encoding="utf-8") + "\n" + ui.joinpath("app.js").read_text(encoding="utf-8"),
+        "__REPORT_DATA__": inline(report),
+        "__APP_CONFIG__": inline(app),
+    }
+    # One pass, so a placeholder that appears inside the data or the code is left alone.
+    pattern = "|".join(re.escape(key) for key in parts)
+    return re.sub(pattern, lambda m: parts[m.group(0)], ui.joinpath("index.html").read_text(encoding="utf-8"))
+
+
 def write_html(report: dict, out_dir: Path) -> Path:
-    """Write the self-contained viewer: the template with this report's data inlined."""
-    template = resources.files("ui_audit").joinpath("report_template.html").read_text(encoding="utf-8")
-    # "</" would end the data block early; "<\\/" is the same string to JSON.
-    payload = json.dumps(_viewer_data(report), ensure_ascii=False).replace("</", "<\\/")
+    """Write the self-contained viewer: the page with this report's data inlined."""
     path = out_dir / REPORT_HTML
-    path.write_text(template.replace("__REPORT_DATA__", payload), encoding="utf-8")
+    path.write_text(page(viewer_data(report)), encoding="utf-8")
     return path
+
+
+def _accepted_file(report: dict) -> Path:
+    config = report.get("config") or {}
+    return Path(report["project_root"]) / config.get("accepted_file", "ui-audit.accepted.json")
+
+
+def _read_accepted(path: Path) -> list[dict]:
+    try:
+        entries = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+
+
+def _chosen(report: dict, ids: list[str], out_dir: Path) -> list[dict]:
+    wanted = set(ids)
+    for group in report.get("groups", []):
+        if group["id"] in wanted:
+            wanted |= set(group["issue_ids"])
+    chosen = [i for i in report["issues"] if i["id"] in wanted]
+    if not chosen:
+        raise LookupError(f"no issue or group in {out_dir} has the id(s): {', '.join(ids)}")
+    return chosen
+
+
+def _save_decisions(report: dict, out_dir: Path, path: Path, entries: list[dict]) -> None:
+    path.write_text(json.dumps(entries, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    # The open report reflects the decision right away; later audits read the file.
+    mark_accepted(report["issues"], {e["signature"]: e for e in entries if e.get("signature")})
+    report["stats"]["issues"] = summary_counts(report["issues"])
+    write_json(report, out_dir)
+    write_html(report, out_dir)
+
+
+def accept(out_dir: Path, ids: list[str], reason: str) -> tuple[int, int, Path]:
+    """Record findings (or whole groups) as intentional in the project's accepted file.
+
+    Returns how many were added, how many were accepted already, and the file."""
+    report = read_json(out_dir)
+    chosen = _chosen(report, ids, out_dir)
+    path = _accepted_file(report)
+    entries = _read_accepted(path)
+    known = {e.get("signature") for e in entries}
+    today = date.today().isoformat()
+    added = [{"signature": i["signature"], "check": i["check"], "route": i["route"], "reason": reason, "date": today}
+             for i in chosen if i["signature"] not in known]
+    _save_decisions(report, out_dir, path, entries + added)
+    return len(added), len(chosen) - len(added), path
+
+
+def unaccept(out_dir: Path, ids: list[str]) -> tuple[int, Path]:
+    """Take findings back out of the accepted file, so they count again. Returns (removed, file)."""
+    report = read_json(out_dir)
+    signatures = {i["signature"] for i in _chosen(report, ids, out_dir)}
+    path = _accepted_file(report)
+    entries = _read_accepted(path)
+    kept = [e for e in entries if e.get("signature") not in signatures]
+    _save_decisions(report, out_dir, path, kept)
+    return len(entries) - len(kept), path

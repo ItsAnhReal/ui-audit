@@ -62,8 +62,12 @@ def _missing_fingerprint(page, cfg: Config) -> str | None:
         return None
 
 
-def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], None] = print) -> dict:
+def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], None] = print,
+        on_event: Callable[..., None] | None = None) -> dict:
+    """Audit the app. `on_event(name, **data)` reports progress: "routes" once, then "route"
+    as each route is measured, skipped or fails to load, and "state" as each state is done."""
     started = time.monotonic()
+    event = on_event or (lambda _name, **_data: None)
     out_dir = Path(cfg.output)
     shots_dir = out_dir / "shots"
     shots_dir.mkdir(parents=True, exist_ok=True)
@@ -107,6 +111,8 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
             log(f"skipped dynamic routes (add [routes.samples]): {', '.join(discovery.skipped_dynamic)}")
         if consent:
             log(f"consent banner closed with \"{consent}\"")
+        event("routes", paths=[r.path for r in discovery.routes],
+              limit=None if only_routes else cfg.routes.max_routes)
 
         # A targeted rerun audits exactly what was asked for, so verify can rely on its coverage.
         dedupe = cfg.routes.dedupe and not only_routes
@@ -130,6 +136,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
             except Exception as exc:  # noqa: BLE001 - keep auditing the other routes
                 errors.append(f"{path}: could not load ({exc.__class__.__name__}: {str(exc)[:120]})")
                 route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": False})
+                event("route", path=path, status="failed", detail=exc.__class__.__name__)
                 continue
             if cfg.states.dismiss_consent and consent is None:
                 # The banner may only exist on some pages; once it is gone, start this route clean.
@@ -144,6 +151,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                 route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": True,
                                       "status": f"skipped: {skip}"})
                 log(f"{path}: skipped ({skip})")
+                event("route", path=path, status="skipped", detail=skip)
                 continue
             route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": True,
                                   "status": "audited", "content": content})
@@ -163,6 +171,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
             state_list = [states.default_state(path), *states.custom_states(cfg, path)]
             state_list += states.discover(page, cfg, path)
             log(f"{path}: {len(state_list)} state(s), breakpoints {breakpoints or 'none'}")
+            event("route", path=path, status="measuring", states=len(state_list))
 
             for state in state_list:
                 record = state.to_dict()
@@ -170,6 +179,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                 if lo > hi:
                     record["status"] = "skipped: no widths in range"
                     state_records.append(record)
+                    event("state", path=path, state=state.id, status=record["status"])
                     continue
                 key_only = cfg.states.sweep == "key" and state.kind != "default" and not vc.widths
                 if vc.widths:
@@ -189,6 +199,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                 if not probe_widths:
                     record["status"] = "skipped: no widths in range"
                     state_records.append(record)
+                    event("state", path=path, state=state.id, status=record["status"])
                     continue
 
                 first = probe_widths[0]
@@ -196,6 +207,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                 if not states.apply(page, cfg, state, first, viewports.height_for(first)):
                     record["status"] = "skipped: could not be applied"
                     state_records.append(record)
+                    event("state", path=path, state=state.id, status=record["status"])
                     continue
                 if state.kind != "default":
                     note_sources(path)  # an opened dialog or menu brings its own components
@@ -232,6 +244,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     record["status"] = f"failed: {exc.__class__.__name__}"
                     state_records.append(record)
                     errors.append(f"{path} [{state.id}]: {str(exc)[:160]}")
+                    event("state", path=path, state=state.id, status=record["status"])
                     continue
                 coverage[f"{path}|{state.id}"] = sorted(results)
 
@@ -257,6 +270,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                 record["probed_widths"] = len(coverage[f"{path}|{state.id}"])
                 record["captures"] = len(plans)
                 state_records.append(record)
+                event("state", path=path, state=state.id, status="audited")
                 log(f"  {state.id}: {len(coverage[f'{path}|{state.id}'])} widths probed, {len(plans)} captured")
 
     issues = issue_set.all()
@@ -282,6 +296,8 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
         "project_root": str(Path(cfg.project_root).resolve()),
         "output_dir": str(out_dir),
         "config": cfg.to_dict(),
+        # A run limited to some routes; widths of a targeted run are in config.viewports.widths.
+        "only_routes": only_routes or [],
         "routes": route_records,
         "skipped_dynamic_routes": discovery.skipped_dynamic,
         "truncated_routes": discovery.truncated,
