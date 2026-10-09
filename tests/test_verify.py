@@ -34,3 +34,11 @@ def test_agent_findings_need_a_new_review_before_counting_as_fixed():
     reviewed = {"issues": [issue(".other", origin="agent")], "captures": [], "coverage": {"/|default": [1440]}}
     result = compare(baseline, reviewed)
     assert [i["selector"] for i in result["fixed"]] == [".x"]
+
+
+def test_accepted_findings_are_left_out_on_either_side():
+    accepted = {**issue(".ok"), "accepted": {"reason": "intentional"}}
+    baseline = {"issues": [accepted], "captures": []}
+    rerun = {"issues": [], "captures": [], "coverage": {"/|default": [800]}}
+    result = compare(baseline, rerun)
+    assert result["fixed"] == [] and result["persistent"] == [] and result["introduced"] == []

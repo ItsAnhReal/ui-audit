@@ -9,7 +9,7 @@ from typing import Callable
 
 from . import __version__, browser, report as report_mod, routes, semantic, states, viewports
 from .config import STANDARD_VIEWPORTS, Config
-from .issues import IssueSet, sweep_signature
+from .issues import IssueSet, load_accepted, mark_accepted, sweep_signature
 from .sources import SourceIndex
 
 NOT_APPLICABLE = frozenset({"<state not applicable>"})
@@ -32,7 +32,7 @@ def _probe_opts(cfg: Config) -> dict:
 
 
 def _skip_reason(page, response, path: str, missing: str | None, seen_pages: dict[str, str],
-                 seen_paths: dict[str, str]) -> str | None:
+                 seen_paths: dict[str, str], loading: bool = False) -> str | None:
     """Why a freshly loaded route adds nothing to the audit, or None if it should be audited."""
     fingerprint = page.evaluate("() => window.__uiAudit.pageFingerprint()")
     landed = routes.normalize(page.url)
@@ -40,8 +40,12 @@ def _skip_reason(page, response, path: str, missing: str | None, seen_pages: dic
         return "not found"
     if landed != path and landed in seen_paths:
         return f"redirects to {seen_paths[landed]}"
-    # A blank page (still loading, or empty by design) identifies nothing.
-    if not fingerprint.startswith("0:") and fingerprint in seen_pages:
+    # A blank page or a loading skeleton identifies nothing: two different pages look alike.
+    if loading or fingerprint.startswith("0:"):
+        seen_paths.setdefault(landed, path)
+        seen_paths.setdefault(path, path)
+        return None
+    if fingerprint in seen_pages:
         return f"same page as {seen_pages[fingerprint]}"
     seen_pages.setdefault(fingerprint, path)
     seen_paths.setdefault(landed, path)
@@ -78,6 +82,16 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
     opts = _probe_opts(cfg)
 
     consent: str | None = None
+    index = SourceIndex(Path(cfg.project_root))
+    route_sources: dict[str, set[str]] = {}
+
+    def note_sources(path: str) -> None:
+        try:
+            found = page.evaluate("() => window.__uiAudit.sourceFiles()")
+        except Exception:  # noqa: BLE001 - a page that navigated away has nothing to add
+            return
+        route_sources.setdefault(path, set()).update(index.relative(f) for f in found)
+
     with browser.session(cfg) as (page, runtime):
         errors.extend(states.run_setup(page, cfg))
         if cfg.states.dismiss_consent:
@@ -123,14 +137,19 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                 if consent:
                     runtime.clear()
                     response = states.open_page(page, cfg, path, 1280, 900)
-            skip = _skip_reason(page, response, path, missing, seen_pages, seen_paths) if dedupe else None
+            content = page.evaluate("() => window.__uiAudit.contentState()")
+            skip = (_skip_reason(page, response, path, missing, seen_pages, seen_paths, content["state"] == "loading")
+                    if dedupe else None)
             if skip:
                 route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": True,
                                       "status": f"skipped: {skip}"})
                 log(f"{path}: skipped ({skip})")
                 continue
             route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": True,
-                                  "status": "audited"})
+                                  "status": "audited", "content": content})
+            note_sources(path)
+            if content["state"] != "ok":
+                log(f"{path}: may not show its real content ({content['state']}: {content['detail']})")
             measured += 1
             breakpoints = page.evaluate("() => window.__uiAudit.breakpoints()")
             all_breakpoints.update(breakpoints)
@@ -140,6 +159,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
             for message in runtime.failed_resources:
                 issue_set.runtime("failed-resource", path, "default", message, 1280)
 
+            initial_anomalies: set[int] = set()
             state_list = [states.default_state(path), *states.custom_states(cfg, path)]
             state_list += states.discover(page, cfg, path)
             log(f"{path}: {len(state_list)} state(s), breakpoints {breakpoints or 'none'}")
@@ -151,8 +171,15 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     record["status"] = "skipped: no widths in range"
                     state_records.append(record)
                     continue
+                key_only = cfg.states.sweep == "key" and state.kind != "default" and not vc.widths
                 if vc.widths:
                     probe_widths = sorted({w for w in vc.widths if lo <= w <= hi})
+                elif key_only:
+                    probe_widths = sorted(
+                        {w for _, w, _ in STANDARD_VIEWPORTS if lo <= w <= hi}
+                        | (set(viewports.breakpoint_neighbors(breakpoints, lo, hi)) if vc.breakpoint_neighbors else set())
+                        | {w for w in initial_anomalies if lo <= w <= hi}
+                    ) or sorted({lo, hi})  # a range with no preset still gets probed
                 else:
                     probe_widths = sorted(
                         set(viewports.sweep_widths(lo, hi, vc.sweep_step))
@@ -171,6 +198,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     state_records.append(record)
                     continue
                 if state.kind != "default":
+                    note_sources(path)  # an opened dialog or menu brings its own components
                     for message in runtime.console_errors:
                         if message not in baseline_errors:
                             issue_set.runtime("console-error", path, state.id, message, first)
@@ -195,8 +223,10 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     return sweep_signature(result)
 
                 try:
-                    sweep = viewports.sweep(probe, probe_widths, refine=vc.refine and not vc.widths,
+                    sweep = viewports.sweep(probe, probe_widths, refine=vc.refine and not vc.widths and not key_only,
                                             max_refinements=vc.max_refinements)
+                    if state.kind == "default":
+                        initial_anomalies.update(sweep.anomalies)
                 except Exception as exc:  # noqa: BLE001 - one broken state must not end the audit
                     coverage[f"{path}|{state.id}"] = sorted(results)
                     record["status"] = f"failed: {exc.__class__.__name__}"
@@ -210,8 +240,11 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     plans = [viewports.CapturePlan(w, ["requested"]) for w in probe_widths]
                 else:
                     bp_widths = viewports.breakpoint_neighbors(breakpoints, lo, hi) if vc.breakpoint_neighbors else []
+                    # Key-width mode does not refine, so its anomalies are the initial page's, where probed.
+                    anomalies = sweep.anomalies + ([w for w in sorted(initial_anomalies)
+                                                    if w in results and w not in sweep.anomalies] if key_only else [])
                     plans = viewports.select_captures(
-                        standard, bp_widths, sweep.anomalies, {w for w, r in results.items() if r["issues"]},
+                        standard, bp_widths, anomalies, {w for w, r in results.items() if r["issues"]},
                         vc.max_captures, lo, hi)
                 plans = [p for p in plans if p.width not in not_applicable]
 
@@ -227,7 +260,9 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                 log(f"  {state.id}: {len(coverage[f'{path}|{state.id}'])} widths probed, {len(plans)} captured")
 
     issues = issue_set.all()
-    index = SourceIndex(Path(cfg.project_root))
+    for record in route_records:
+        if record.get("status") == "audited":
+            record["sources"] = sorted(s for s in route_sources.get(record["path"], ()) if not s.startswith(("/", "..")))
     for issue in issues:
         if issue["check"] not in ("console-error", "failed-resource"):
             issue["source_candidates"] = index.rank(issue.get("hints") or {})
@@ -236,11 +271,14 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
             if issue["route"] == capture["route"] and issue["state"] == capture["state"] and capture["width"] in issue["widths"]:
                 issue["evidence"].append(capture.get("annotated") or capture["file"])
 
+    mark_accepted(issues, load_accepted(Path(cfg.project_root) / cfg.accepted_file))
+
     result = {
         "tool": "ui-audit",
         "version": __version__,
         "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "base_url": cfg.base_url,
+        "locale": cfg.locale,
         "project_root": str(Path(cfg.project_root).resolve()),
         "output_dir": str(out_dir),
         "config": cfg.to_dict(),

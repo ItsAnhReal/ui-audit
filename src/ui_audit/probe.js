@@ -14,6 +14,7 @@
   const TEXT_FIELD = "textarea,select,input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=reset]):not([type=image]):not([type=range]):not([type=color]):not([type=file])";
   const CONSENT_DECLINE = /only (the )?(necessary|essential|required)|(necessary|essential|required)( cookies)? only|reject|decline|deny|refuse|nur (notwendige|erforderliche|essenzielle)|ablehnen|refuser|rechazar|rifiuta/i;
   const CONSENT_TOPIC = /cookie|consent|einwilligung/i;
+  const PROBLEM_HEADING = /not found|unavailable|went wrong|\berror\b|access denied|forbidden|no longer exists|nicht gefunden|nicht verfügbar|\bfehler\b|kein zugriff|introuvable|indisponible|no encontrad|no disponible/i;
   const DEFAULT_UNSAFE = [
     "delete", "remove", "logout", "log out", "sign out", "signout", "pay", "buy", "purchase",
     "checkout", "order", "submit", "send", "publish", "unsubscribe", "cancel subscription",
@@ -78,6 +79,22 @@
       node = node.parentElement;
     }
     return parts.join(" > ");
+  }
+
+  // The first visible text that runs past the viewport's right edge with nothing clipping it.
+  function overflowingText(vw) {
+    if (!document.body) return null;
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const range = document.createRange();
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const parent = node.parentElement;
+      if (!node.nodeValue.trim() || !parent || !isVisible(parent) || clippingAncestor(parent)) continue;
+      if (getComputedStyle(parent).position === "fixed") continue;
+      range.selectNodeContents(node);
+      const right = range.getBoundingClientRect().right + window.scrollX;
+      if (right > vw + 1) return { el: parent, text: node.nodeValue.trim().slice(0, 60), right: Math.round(right) };
+    }
+    return null;
   }
 
   function clippingAncestor(el) {
@@ -224,12 +241,22 @@
     };
   }
 
-  function isPinned(el) {
+  // The nearest fixed or sticky ancestor (or the element itself), or null for page content.
+  function pinnedLayer(el) {
     for (let node = el; node && node !== document.documentElement; node = node.parentElement) {
       const position = getComputedStyle(node).position;
-      if (position === "fixed" || position === "sticky") return true;
+      if (position === "fixed" || position === "sticky") return { node, sticky: position === "sticky" };
     }
-    return false;
+    return null;
+  }
+
+  // A fixed or sticky bar passes over scrolling content by design, and a sticky row or
+  // header slides under a fixed bar the same way. Two fixed layers stay where they are,
+  // so when they overlap they always do.
+  function passesOver(a, b) {
+    if (!a && !b) return false;
+    if (!a || !b) return true;
+    return a.node !== b.node && (a.sticky || b.sticky);
   }
 
   function isAdornment(field, fieldRect, other, otherRect) {
@@ -324,8 +351,20 @@
             `Extends to ${right}px in a ${vw}px viewport (page scrolls sideways by ${scrollWidth - vw}px).`));
         }
       } else {
-        push(makeIssue("horizontal-overflow", "P1", document.documentElement,
-          `Page is ${scrollWidth}px wide in a ${vw}px viewport.`));
+        // No box sticks out, so the page is widened by text that overflows its box (a long
+        // word that cannot wrap) or by a box nobody sees (a hidden tooltip left in place).
+        const culprit = overflowingText(vw) || all.find((el) => !isVisible(el) && el.getClientRects().length
+          && beyondRight(el) && getComputedStyle(el).position !== "fixed" && !clippingAncestor(el));
+        if (culprit && culprit.el) {
+          push(makeIssue("horizontal-overflow", "P1", culprit.el,
+            `Text "${culprit.text}" runs to ${culprit.right}px in a ${vw}px viewport (page scrolls sideways by ${scrollWidth - vw}px).`));
+        } else if (culprit) {
+          push(makeIssue("horizontal-overflow", "P1", culprit,
+            `An invisible element extends to ${Math.round(culprit.getBoundingClientRect().right + window.scrollX)}px in a ${vw}px viewport (page scrolls sideways by ${scrollWidth - vw}px).`));
+        } else {
+          push(makeIssue("horizontal-overflow", "P1", document.documentElement,
+            `Page is ${scrollWidth}px wide in a ${vw}px viewport.`));
+        }
       }
     }
 
@@ -378,14 +417,13 @@
     const controls = visible.filter((el) => el.matches(INTERACTIVE)).slice(0, 400);
     // Overlap is judged on what is visible: a list scrolled under a footer does not cover it.
     const boxes = controls.map(visibleRect);
-    const pinned = controls.map(isPinned);
+    const pinned = controls.map(pinnedLayer);
     const lines = controls.map(lineBoxes);
     for (let i = 0; i < controls.length; i++) {
       for (let j = i + 1; j < controls.length; j++) {
         const a = controls[i], b = controls[j];
         if (a.contains(b) || b.contains(a)) continue;
-        // A fixed or sticky bar passes over scrolling content by design.
-        if (pinned[i] !== pinned[j]) continue;
+        if (passesOver(pinned[i], pinned[j])) continue;
         let ra = boxes[i], rb = boxes[j];
         // A button placed inside a text field (show password, clear search) is an adornment.
         if (isAdornment(a, ra, b, rb) || isAdornment(b, rb, a, ra)) continue;
@@ -429,7 +467,7 @@
       const me = targets[k];
       for (let m = 0; m < controls.length; m++) {
         if (m === k || controls[k].contains(controls[m]) || controls[m].contains(controls[k])) continue;
-        if (pinned[m] !== pinned[k]) continue;  // a floating panel is not a neighbour of the page under it
+        if (passesOver(pinned[m], pinned[k])) continue;  // a floating panel is not a neighbour of the page under it
         const other = targets[m];
         if (!other.r.width || !other.r.height) continue;
         if (other.small) {
@@ -532,6 +570,43 @@
     return `${expanded}|${shown}`;
   }
 
+  // Source files of the components on the page, as far as a dev build reveals them
+  // (React's _debugSource, Vue's __file, Svelte's __svelte_meta). Empty in production builds.
+  function sourceFiles() {
+    const files = new Set();
+    const seen = new WeakSet();
+    const all = document.body ? document.body.querySelectorAll("*") : [];
+    for (let n = 0; n < all.length && n < 5000; n++) {
+      const node = all[n];
+      const key = Object.keys(node).find((k) => k.startsWith("__reactFiber$"));
+      for (let fiber = key && node[key]; fiber && !seen.has(fiber); fiber = fiber.return) {
+        seen.add(fiber);
+        if (fiber._debugSource && fiber._debugSource.fileName) files.add(fiber._debugSource.fileName);
+      }
+      const vue = node.__vueParentComponent;
+      if (vue && vue.type && vue.type.__file) files.add(vue.type.__file);
+      const svelte = node.__svelte_meta;
+      if (svelte && svelte.loc && svelte.loc.file) files.add(svelte.loc.file);
+    }
+    return Array.from(files);
+  }
+
+  // Whether the page shows what it is for. A skeleton, an error screen or an almost
+  // empty page measures clean and says nothing about the real page.
+  function contentState() {
+    const shown = (sel) => Array.from(document.querySelectorAll(sel)).filter(isVisible);
+    const busy = shown('[aria-busy="true"],[role=progressbar]').length;
+    const skeletons = shown('[class*="skeleton" i],[class*="shimmer" i]').length;
+    if (busy || skeletons >= 3) return { state: "loading", detail: busy ? "a region is still marked busy" : `${skeletons} skeleton placeholders` };
+    const heading = shown("h1,h2,[role=heading]").map((el) => (el.innerText || "").replace(/\s+/g, " ").trim()).find(Boolean) || "";
+    if (PROBLEM_HEADING.test(heading)) return { state: "error-like", detail: heading.slice(0, 80) };
+    const text = (document.body ? document.body.innerText : "").replace(/\s+/g, " ").trim();
+    // Little to read and next to nothing to operate. A sign-in form is short too, but it has controls.
+    const controls = shown(INTERACTIVE).length;
+    if (text.length < 250 && controls < 3) return { state: "thin", detail: `${text.length} characters of text, ${controls} control${controls === 1 ? "" : "s"}` };
+    return { state: "ok", detail: "" };
+  }
+
   // Identifies what a route renders, independent of its URL, so the audit can
   // tell a not-found page or an alias from a page of its own.
   function pageFingerprint() {
@@ -592,6 +667,6 @@
   }
 
   window.__uiAudit = {
-    probe, breakpoints, stateCandidates, consentDecline, domFingerprint, pageFingerprint, isTriggerVisible, annotate, clearAnnotations,
+    probe, breakpoints, stateCandidates, consentDecline, contentState, sourceFiles, domFingerprint, pageFingerprint, isTriggerVisible, annotate, clearAnnotations,
   };
 })();

@@ -1,0 +1,58 @@
+# Example: audit the pages a pull request touches and comment the result.
+#
+# This is a starting point, not a tested recipe: the two steps marked ADAPT depend on
+# your app. It needs a committed full report to compare against (see "Baseline" below).
+name: ui-audit
+on: pull_request
+
+jobs:
+  ui-audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # --changed-since needs the base commit
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "ui-audit @ git+https://github.com/AnhAnAsian/ui-audit" && playwright install --with-deps chromium
+
+      # ADAPT: install and start your app, then wait until it answers.
+      - run: npm ci && (npm run dev -- --port 3000 &) && npx wait-on http://localhost:3000
+
+      # Baseline: a full report of the base branch. Keep report.json in the repository
+      # (for example under .ui-audit/baseline, without the screenshots) and refresh it on
+      # main with a scheduled or post-merge run. ADAPT the path if you keep it elsewhere.
+      - name: Audit routes that render a changed file
+        run: |
+          ui-audit audit http://localhost:3000 --fast --no-annotate \
+            --changed-since "origin/${{ github.base_ref }}" \
+            --baseline .ui-audit/baseline --output .ui-audit/pr
+
+      - name: Compare with the baseline
+        id: verify
+        run: |
+          if [ -f .ui-audit/pr/report.json ]; then
+            ui-audit verify .ui-audit/baseline .ui-audit/pr > verify.md || echo "blocking=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No audited route renders a changed file." > verify.md
+          fi
+
+      - name: Comment on the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment "${{ github.event.pull_request.number }}" --body-file verify.md
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-audit-report
+          path: .ui-audit/pr
+
+      # verify exits 1 when a P1 or P2 finding was introduced.
+      - if: steps.verify.outputs.blocking == 'true'
+        run: exit 1

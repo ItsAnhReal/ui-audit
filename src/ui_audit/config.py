@@ -43,6 +43,10 @@ class StateConfig:
     unsafe_words: list[str] = field(default_factory=list)
     # Turn optional cookies down once, so a consent banner does not cover every page.
     dismiss_consent: bool = True
+    # Widths probed in states other than the initial page: "full" sweeps the whole range like
+    # the initial page; "key" probes only the presets, the breakpoints and the widths where
+    # the initial page changed, which is where an opened menu or dialog usually breaks too.
+    sweep: str = "full"
 
 
 @dataclass
@@ -75,6 +79,10 @@ class Config:
     storage_state: str = ""
     browser_path: str = ""
     settle_ms: int = 150
+    # Browser language, e.g. "de" or "fr-FR"; empty keeps Chromium's default (en-US).
+    locale: str = ""
+    # Findings accepted as intentional, relative to project_root; see `ui-audit accept`.
+    accepted_file: str = "ui-audit.accepted.json"
     # Actions run once on "/" before anything is measured, e.g. [{click = "#close-promo"}].
     setup: list[dict[str, Any]] = field(default_factory=list)
     routes: RouteConfig = field(default_factory=RouteConfig)
@@ -117,6 +125,8 @@ def from_dict(data: dict[str, Any]) -> Config:
     bad = set(cfg.routes.discover) - set(DISCOVERY_METHODS)
     if bad:
         raise ConfigError(f"unknown discovery method(s): {', '.join(sorted(bad))}")
+    if cfg.states.sweep not in ("full", "key"):
+        raise ConfigError('states.sweep must be "full" or "key"')
     if cfg.viewports.min_width > cfg.viewports.max_width:
         raise ConfigError("viewports.min_width must not exceed viewports.max_width")
     return cfg

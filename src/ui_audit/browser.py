@@ -82,6 +82,8 @@ def session(cfg):
         context_args = {"viewport": {"width": 1280, "height": 900}}
         if cfg.storage_state:
             context_args["storage_state"] = cfg.storage_state
+        if cfg.locale:
+            context_args["locale"] = cfg.locale
         context = browser.new_context(**context_args)
         context.add_init_script(PROBE_JS)
         page = context.new_page()

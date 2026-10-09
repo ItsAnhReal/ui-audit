@@ -98,7 +98,9 @@ body { margin: 0; font: 16px/1.5 sans-serif; }
 main a { display: block; width: 200px; height: 44px; margin: 720px 24px 0; }
 .bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 16px; background: #eee; }
 .bar button { width: 100%; height: 48px; }
+.stick { position: sticky; top: 790px; margin-top: 790px; background: #ddd; }
 </style></head><body>
+<section><div class="stick"><button>Sort by price</button></div><div style="height: 1400px"></div></section>
 <div class="field"><input aria-label="Password" type="password"><button aria-label="Show password">o</button></div>
 <p class="legal">By continuing you accept the <a href="/pricing.html">terms of service agreement</a> and the
 <a href="/dashboard.html">privacy and data policy</a>.</p>
@@ -195,6 +197,45 @@ def test_saved_session_is_reused_by_the_audit(demo_site, tmp_path):
     assert audit.run(cfg, log=lambda _: None)["coverage"]["/pricing.html|default"] == [390]
 
 
+def test_pages_without_real_content_are_called_out(demo_site, tmp_path):
+    url, site = demo_site
+    page = "<!doctype html><html lang=en><head><meta charset=utf-8><title>t</title></head><body>{}</body></html>"
+    (site / "gone.html").write_text(page.format("<h1>This menu is temporarily unavailable.</h1><p>" + "Try later. " * 30 + "</p>"))
+    (site / "thin.html").write_text(page.format("<p>Coming soon.</p>"))
+    (site / "busy.html").write_text(page.format('<main aria-busy="true"><p>' + "Loading the dashboard. " * 20 + "</p></main>"))
+    (site / "busy-too.html").write_text((site / "busy.html").read_text())
+    included = ["/pricing.html", "/gone.html", "/thin.html", "/busy.html", "/busy-too.html"]
+    cfg = config(url, site, tmp_path / "run", routes={"include": included}, states={"auto": False},
+                 viewports={"widths": [390]})
+    report = audit.run(cfg, log=lambda _: None)
+    content = {r["path"]: r["content"]["state"] for r in report["routes"]}
+    # Two pages that are both still loading look alike; neither is skipped as a copy of the other.
+    assert content == {"/pricing.html": "ok", "/gone.html": "error-like", "/thin.html": "thin",
+                       "/busy.html": "loading", "/busy-too.html": "loading"}
+    assert report["groups"] == [] or all(g["issue_ids"] for g in report["groups"])
+
+
+def test_key_width_mode_probes_states_less_and_still_finds_their_defects(demo_site, tmp_path):
+    url, site = demo_site
+    only_home = {"routes": {"include": ["/"]}}
+    full = audit.run(config(url, site, tmp_path / "full", **only_home), log=lambda _: None)
+    fast = audit.run(config(url, site, tmp_path / "fast", states={"sweep": "key"}, **only_home), log=lambda _: None)
+    assert len(fast["coverage"]["/|default"]) == len(full["coverage"]["/|default"])
+    assert len(fast["coverage"]["/|expand-menu"]) < len(full["coverage"]["/|expand-menu"])
+    assert found(fast, "horizontal-overflow", "/", "expand-menu")
+    assert fast["stats"]["probes"] < full["stats"]["probes"]
+
+
+def test_locale_sets_the_browser_language(demo_site, tmp_path):
+    from ui_audit import browser
+
+    url, site = demo_site
+    cfg = config(url, site, tmp_path / "run", locale="de")
+    with browser.session(cfg) as (page, _):
+        browser.load(page, url, "/", 1280, 900, 0)
+        assert page.evaluate("navigator.language") == "de"
+
+
 def test_same_text_in_different_markup_is_audited_as_its_own_page(demo_site, tmp_path):
     url, site = demo_site
     page = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Save</title></head><body><main>{}</main></body></html>'
@@ -230,3 +271,27 @@ def test_setup_actions_are_replayed_on_every_page(demo_site, tmp_path):
     unset = audit.run(config(url, site, tmp_path / "unset", routes={"include": ["/promo.html"]},
                              states={"auto": False}, viewports={"widths": [390]}), log=lambda _: None)
     assert found(unset, "horizontal-overflow", "/promo.html")
+
+
+def test_key_width_mode_probes_a_range_without_presets(demo_site, tmp_path):
+    url, site = demo_site
+    cfg = config(url, site, tmp_path / "run", routes={"include": ["/"]}, states={"sweep": "key"},
+                 viewports={"min_width": 410, "max_width": 470, "breakpoint_neighbors": False})
+    report = audit.run(cfg, log=lambda _: None)
+    opened = [s for s in report["states"] if s["id"] != "default"]
+    assert opened and all(s["status"] == "audited" for s in opened)
+
+
+def test_page_overflow_names_the_text_or_hidden_box_behind_it(demo_site, tmp_path):
+    url, site = demo_site
+    page = '<!doctype html><html lang="de"><head><meta charset="utf-8"><title>t</title><style>body {{ margin: 0; }}</style></head><body>{}</body></html>'
+    (site / "long-word.html").write_text(page.format('<h1 style="font-size: 32px">Kategorieaufschlüsselungsübersicht</h1>'))
+    (site / "tooltip.html").write_text(page.format(
+        '<p>Chart</p><div style="position: absolute; left: 500px; top: 0; width: 120px; visibility: hidden">Tooltip</div>'))
+    cfg = config(url, site, tmp_path / "run", routes={"include": ["/long-word.html", "/tooltip.html"]},
+                 states={"auto": False}, viewports={"widths": [320]})
+    report = audit.run(cfg, log=lambda _: None)
+    [word] = found(report, "horizontal-overflow", "/long-word.html")
+    assert word["selector"].endswith("h1") and "Kategorieaufschlüsselungsübersicht" in word["message"]
+    [hidden] = found(report, "horizontal-overflow", "/tooltip.html")
+    assert hidden["selector"].endswith("div") and "invisible element" in hidden["message"]

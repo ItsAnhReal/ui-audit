@@ -17,3 +17,23 @@ def test_init_writes_config_and_gitignore(tmp_path, capsys):
     assert 'base_url = "http://localhost:8000"' in config and '"/about.html"' in config
     assert ".ui-audit/" in (tmp_path / ".gitignore").read_text()
     assert main(["init", "--project-root", str(tmp_path)]) == 1
+
+
+def test_routes_for_changes_picks_what_a_change_can_affect():
+    from ui_audit.cli import routes_for_changes
+
+    baseline = {"routes": [
+        {"path": "/", "status": "audited", "sources": ["src/Home.tsx", "src/Card.tsx"]},
+        {"path": "/pricing", "status": "audited", "sources": ["src/Pricing.tsx", "src/Card.tsx"]},
+        {"path": "/old", "status": "skipped: not found"},
+    ]}
+    assert routes_for_changes(baseline, ["README.md", "api/server.py"])[0] == []
+    assert routes_for_changes(baseline, ["src/Pricing.tsx"])[0] == ["/pricing"]
+    assert routes_for_changes(baseline, ["src/Card.tsx"])[0] == ["/", "/pricing"]
+    # Every extension the source mapper reads counts as UI source, MDX included.
+    assert routes_for_changes(baseline, ["src/Pricing.mdx"])[0] == ["/", "/pricing"]
+    # A stylesheet or an unseen component could reach any page.
+    assert routes_for_changes(baseline, ["src/Pricing.tsx", "src/index.css"])[0] == ["/", "/pricing"]
+    for route in baseline["routes"]:
+        route.pop("sources", None)
+    assert routes_for_changes(baseline, ["src/Pricing.tsx"])[0] == ["/", "/pricing"]

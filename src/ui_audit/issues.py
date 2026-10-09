@@ -9,6 +9,9 @@ compares between runs.
 from __future__ import annotations
 
 import hashlib
+import json
+import re
+from pathlib import Path
 
 SEVERITY_ORDER = {"P1": 1, "P2": 2, "P3": 3}
 
@@ -93,6 +96,67 @@ class IssueSet:
                 continue
             kept.append(issue)
         return sorted(kept, key=lambda i: (SEVERITY_ORDER.get(i["severity"], 9), i["route"], i["state"], i["check"], i["selector"]))
+
+
+def _group_key(issue: dict) -> tuple[str, dict | None]:
+    """What makes two findings the same defect: the component that renders the element.
+
+    One overflowing card is one thing to fix however many routes and states show it. The
+    line a framework's dev build reports for the element identifies that card; without it,
+    the element's own tag and classes are the next best thing.
+    """
+    check = issue["check"]
+    if check in ("console-error", "failed-resource"):
+        return f"{check}|{issue['message'].split('?')[0][:160]}", None
+    top = (issue.get("source_candidates") or [None])[0]
+    if top and top.get("line") and "runtime source" in top.get("reasons", []):
+        return f"{check}|{top['file']}:{top['line']}", {"file": top["file"], "line": top["line"]}
+    tail = re.sub(r":nth-of-type\(\d+\)", "", issue.get("selector", "").split(" > ")[-1])
+    return f"{check}|{tail}", None
+
+
+def assign_groups(issues: list[dict]) -> list[dict]:
+    """Tag every issue with the id of its group and return the groups, worst first."""
+    groups: dict[str, dict] = {}
+    for issue in issues:
+        key, source = _group_key(issue)
+        group = groups.get(key)
+        if group is None:
+            group = groups[key] = {"id": short_id(key), "check": issue["check"], "severity": issue["severity"],
+                                   "source": source, "message": issue["message"], "count": 0, "routes": [],
+                                   "widths": [], "issue_ids": []}
+        issue["group"] = group["id"]
+        group["severity"] = worst(group["severity"], issue["severity"])
+        group["count"] += 1
+        group["issue_ids"].append(issue["id"])
+        if issue["route"] not in group["routes"]:
+            group["routes"].append(issue["route"])
+        widths = issue.get("widths") or []
+        if widths:
+            group["widths"] = [min(widths + group["widths"]), max(widths + group["widths"])]
+    return sorted(groups.values(), key=lambda g: (SEVERITY_ORDER.get(g["severity"], 9), -len(g["routes"]), -g["count"]))
+
+
+def load_accepted(path: Path) -> dict[str, dict]:
+    """Findings someone looked at and accepted as intentional, by signature."""
+    try:
+        entries = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {e["signature"]: e for e in entries if isinstance(e, dict) and e.get("signature")}
+
+
+def mark_accepted(issues: list[dict], accepted: dict[str, dict]) -> int:
+    """Flag accepted issues; they stay in the report but out of the counts."""
+    count = 0
+    for issue in issues:
+        entry = accepted.get(issue["signature"])
+        if entry:
+            issue["accepted"] = {"reason": entry.get("reason", ""), "date": entry.get("date", "")}
+            count += 1
+        else:
+            issue.pop("accepted", None)
+    return count
 
 
 def sweep_signature(probe_result: dict) -> frozenset[str]:
