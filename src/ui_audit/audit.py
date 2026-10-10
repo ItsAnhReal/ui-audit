@@ -20,6 +20,10 @@ CANDIDATE_FACTOR = 8
 
 
 def _file_slug(route: str) -> str:
+    # Hash-router routes ("/#/settings") get their own prefix so they don't share files with "/settings".
+    path, hashed, fragment = route.partition("#")
+    if hashed:
+        return f"{_file_slug(path)}--hash-{_file_slug(fragment)}"
     return states.slug(route.strip("/")) if route.strip("/") else "root"
 
 
@@ -52,10 +56,11 @@ def _landed(url: str, base_url: str) -> str:
 
 
 def _skip_reason(page, response, path: str, missing: str | None, seen_pages: dict[str, str],
-                 seen_paths: dict[str, str], loading: bool = False) -> str | None:
+                 seen_paths: dict[str, str], loading: bool = False, base_url: str = "") -> str | None:
     """Why a freshly loaded route adds nothing to the audit, or None if it should be audited."""
     fingerprint = page.evaluate("() => window.__uiAudit.pageFingerprint()")
-    landed = routes.normalize(page.url)
+    # Routes are relative to the base path; a page outside it keeps its full URL and matches no route.
+    landed = routes.route_of(base_url, page.url) or page.url
     if path != "/" and (fingerprint == missing or (response is not None and response.status == 404)):
         return "not found"
     if landed != path and landed in seen_paths:
@@ -211,7 +216,8 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     event("route", path=path, status="skipped", detail=f"not a web page ({kind})")
                     continue
                 content = page.evaluate("() => window.__uiAudit.contentState()")
-                skip = (_skip_reason(page, response, path, missing, seen_pages, seen_paths, content["state"] == "loading")
+                skip = (_skip_reason(page, response, path, missing, seen_pages, seen_paths, content["state"] == "loading",
+                                     base_url=cfg.base_url)
                         if dedupe else None)
                 if skip:
                     route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": True,

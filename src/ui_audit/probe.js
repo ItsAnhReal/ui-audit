@@ -13,13 +13,25 @@
   const LAYER = "[role=menu],[role=dialog],[role=listbox],[role=tooltip],[popover],dialog,[aria-modal=true]";
   const TEXT_FIELD = "textarea,select,input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=reset]):not([type=image]):not([type=range]):not([type=color]):not([type=file])";
   const CONSENT_DECLINE = /only (the )?(necessary|essential|required)|(necessary|essential|required)( cookies)? only|reject|decline|deny|refuse|nur (notwendige|erforderliche|essenzielle)|ablehnen|refuser|rechazar|rifiuta/i;
-  const CONSENT_TOPIC = /cookie|consent|einwilligung/i;
+  const CONSENT_TOPIC = /cookie|consent|einwilligung|zustimm|datenschutz|privacy|confidentialité|vie privée|privacidad|rgpd|gdpr|dsgvo/i;
   const PROBLEM_HEADING = /not found|unavailable|went wrong|\berror\b|access denied|forbidden|no longer exists|nicht gefunden|nicht verfügbar|\bfehler\b|kein zugriff|introuvable|indisponible|no encontrad|no disponible/i;
+  // Whole words or phrases, matched case-insensitively: "order" alone would also stop "Order history".
   const DEFAULT_UNSAFE = [
     "delete", "remove", "logout", "log out", "sign out", "signout", "pay", "buy", "purchase",
-    "checkout", "order", "submit", "send", "publish", "unsubscribe", "cancel subscription",
-    "löschen", "entfernen", "abmelden", "kaufen", "bestellen", "bezahlen", "senden",
+    "checkout", "place order", "order now", "submit", "send", "publish", "unsubscribe", "cancel subscription",
+    "reset", "archive", "disable", "deactivate", "approve", "reject", "save", "transfer", "refund",
+    "löschen", "entfernen", "abmelden", "kaufen", "bestellen", "bezahlen", "senden", "absenden",
+    "zurücksetzen", "archivieren", "deaktivieren", "genehmigen", "ablehnen", "speichern", "überweisen",
+    "erstatten", "kündigen", "veröffentlichen",
   ];
+
+  // One pattern for a list of words: each matches as a whole word (letters and digits of any
+  // script count as word characters), any run of spaces matches the space in a phrase.
+  function wordPattern(words) {
+    const parts = words.map((w) => String(w).trim()).filter(Boolean)
+      .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+"));
+    return parts.length ? new RegExp(`(?<![\\p{L}\\p{N}])(?:${parts.join("|")})(?![\\p{L}\\p{N}])`, "iu") : null;
+  }
 
   function isIgnored(el, ignore) {
     if (el.closest(`[${OVERLAY_ATTR}]`)) return true;
@@ -342,14 +354,27 @@
     return rects.length > 1 ? rects : null;
   }
 
-  // The button that turns optional cookies down in a consent banner, if one is showing.
+  // A box that floats over the page: a dialog, a region or aside, or a fixed, sticky or high
+  // stacked layer. Consent banners are one; a table row or a page footer is not.
+  function isFloatingLayer(el) {
+    if (el.matches("dialog,aside,[role=dialog],[role=alertdialog],[role=region],[aria-modal=true]")) return true;
+    const style = getComputedStyle(el);
+    if (style.position === "fixed" || style.position === "sticky") return true;
+    return style.position !== "static" && (parseInt(style.zIndex, 10) || 0) >= 1000;
+  }
+
+  // The button that turns optional cookies down in a consent banner, if one is showing. Only a
+  // button inside a floating layer whose own, banner-sized text is about cookies or consent
+  // counts: a "Reject" in an admin table under a footer "Cookie policy" link is never clicked.
   function consentDecline() {
     for (const el of document.querySelectorAll("button,[role=button],a[href]")) {
       if (!isVisible(el)) continue;
       const name = (accessibleName(el) || "").replace(/\s+/g, " ").trim();
       if (!name || name.length > 60 || !CONSENT_DECLINE.test(name)) continue;
       for (let node = el.parentElement, depth = 0; node && node !== document.body && depth < 8; node = node.parentElement, depth++) {
-        if (CONSENT_TOPIC.test(node.innerText || "")) return { selector: cssPath(el), label: name };
+        if (!isFloatingLayer(node)) continue;
+        const text = (node.innerText || "").replace(/\s+/g, " ");
+        if (text.length <= 1500 && CONSENT_TOPIC.test(text)) return { selector: cssPath(el), label: name };
       }
     }
     return null;
@@ -646,7 +671,7 @@
 
   function stateCandidates(opts) {
     opts = opts || {};
-    const unsafe = DEFAULT_UNSAFE.concat(opts.unsafeWords || []).map((w) => w.toLowerCase());
+    const unsafe = wordPattern(DEFAULT_UNSAFE.concat(opts.unsafeWords || []));
     const selectors = [
       ["[aria-expanded=false]", "expand"],
       ["[aria-haspopup]:not([aria-expanded=true])", "popup"],
@@ -666,8 +691,7 @@
           const href = el.getAttribute("href") || "";
           if (href && !href.startsWith("#") && !href.startsWith("javascript:")) continue;
         }
-        const name = (accessibleName(el) || "").toLowerCase();
-        if (unsafe.some((w) => name.includes(w))) continue;
+        if (unsafe.test(accessibleName(el) || "")) continue;
         out.push({ selector: cssPath(el), kind, label: accessibleName(el).slice(0, 40) || kind });
       }
     }

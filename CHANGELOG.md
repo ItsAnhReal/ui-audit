@@ -14,6 +14,8 @@
 - The action installs only Chromium's system libraries when the browser comes from the cache, and caches pip downloads.
 - `ui-audit ui` opens only from the address it prints at start (`http://127.0.0.1:8484/?k=…`, like Jupyter); without the key the page answers 403, so other users on the same machine cannot use the app. Sessions from the app's login are saved only as plain file names next to the runs.
 - App and report: a visible keyboard focus outline everywhere (also in forced-colors mode), named dialogs, errors announced as alerts, a setting to turn off the single-key shortcuts `j`, `k` and `/`, no "open page" link for addresses that are not http(s), and a quoted path in the copied `accept` command.
+- Route discovery: apps under a sub-path (`base_url = "http://host/app/"`) get routes relative to it instead of `/app/app/…`; hash-router pages (`/#/settings`) and Remix / React Router flat routes in `app/routes` are found; sitemaps listing the production host, sitemap indexes and `Sitemap:` lines in `robots.txt` are read.
+- Safer automatic clicks: the consent banner's decline button is only clicked inside a dialog or a fixed or floating box about cookies, and unsafe words (now also reset, archive, save, approve, reject, transfer, refund, … and German equivalents) match whole words, so "order" no longer stops "Border options". Custom `unsafe_words` match whole words too.
 
 ## 0.1.0 — first public release
 

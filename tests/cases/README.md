@@ -6,5 +6,9 @@ that page must report: `clean`, or `check=count` pairs. `tests/test_cases.py` au
 Most of these started as a false finding on a real app. When a check reports something that
 is not a defect, add the smallest page that reproduces it here before changing the check.
 
+`consent/` and `unsafe/` hold pages for what the probe clicks on its own: the consent banner's
+decline button and safe state controls. Their first line names what it must pick;
+`tests/test_state_safety.py` checks them.
+
 `never-click-*.html` pages are also audited with state discovery on by `tests/test_never_click.py`:
 disclosure-looking controls with destructive names must never be clicked.
