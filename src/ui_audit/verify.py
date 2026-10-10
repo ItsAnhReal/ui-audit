@@ -2,8 +2,10 @@
 
 A targeted rerun covers only some routes, states and widths. A baseline issue
 counts as fixed only if the new run looked where the issue used to be: same
-route and state, and at least one overlapping probed width. Everything else
-is reported as out of scope rather than silently counted as fixed.
+route and state, and at least one overlapping probed width where its check
+reported everything it found. Everything else is reported as out of scope
+rather than silently counted as fixed. A new issue on a route or state the
+baseline never audited is in `new_scope`, not `introduced`.
 """
 
 from __future__ import annotations
@@ -18,20 +20,31 @@ def _coverage(report: dict) -> dict[str, set[int]]:
     return {key: set(widths) for key, widths in report.get("coverage", {}).items()}
 
 
-def _in_scope(issue: dict, coverage: dict[str, set[int]]) -> bool:
+def _in_scope(issue: dict, coverage: dict[str, set[int]], truncated: dict | None = None) -> bool:
     """Whether the run looked where the issue was: in every browser it showed up in, at a width
-    it showed up at in that browser."""
+    it showed up at in that browser where its check was not capped (`coverage_truncated`)."""
     by_browser = issue.get("widths_by_browser") or {}
     for engine in issue.get("browsers") or ["chromium"]:
+        key = coverage_key(issue["route"], issue["state"], engine)
         widths = set(by_browser.get(engine) or issue.get("widths") or [])
-        probed = coverage.get(coverage_key(issue["route"], issue["state"], engine))
-        if not probed or not probed & widths:
+        probed = coverage.get(key)
+        capped = set(((truncated or {}).get(key) or {}).get(issue["check"]) or [])
+        if not probed or not (probed - capped) & widths:
             return False
     return True
 
 
+def _new_scope(issue: dict, baseline_coverage: dict[str, set[int]]) -> bool:
+    """Whether the baseline audited none of the issue's route and state, in any of its browsers."""
+    return not any(coverage_key(issue["route"], issue["state"], engine) in baseline_coverage
+                   for engine in issue.get("browsers") or ["chromium"])
+
+
 def compare(baseline: dict, current: dict) -> dict:
     coverage = _coverage(current)
+    truncated = current.get("coverage_truncated") or {}
+    # A baseline without coverage (agent findings only, hand-made) cannot tell what it looked at.
+    base_coverage = _coverage(baseline) if "coverage" in baseline else None
     # A finding accepted as intentional is neither introduced nor still to fix.
     accepted = {i["signature"] for i in baseline["issues"] + current["issues"] if i.get("accepted")}
     base = {i["signature"]: i for i in baseline["issues"] if i["signature"] not in accepted}
@@ -46,11 +59,14 @@ def compare(baseline: dict, current: dict) -> dict:
             persistent.append(now[sig])
         elif issue.get("origin") == "agent" and (issue["route"], issue["state"]) not in reviewed:
             (needs_review if f"{issue['route']}|{issue['state']}" in coverage else out_of_scope).append(issue)
-        elif _in_scope(issue, coverage):
+        elif _in_scope(issue, coverage, truncated):
             fixed.append(issue)
         else:
             out_of_scope.append(issue)
-    introduced = [issue for sig, issue in now.items() if sig not in base]
+    introduced, new_scope = [], []
+    for sig, issue in now.items():
+        if sig not in base:
+            (new_scope if base_coverage is not None and _new_scope(issue, base_coverage) else introduced).append(issue)
 
     def brief(issue: dict) -> dict:
         return {key: issue.get(key) for key in ("id", "severity", "check", "route", "state", "selector", "message", "widths", "origin",
@@ -62,6 +78,8 @@ def compare(baseline: dict, current: dict) -> dict:
         "current": current.get("output_dir"),
         "fixed": [brief(i) for i in by_severity(fixed)],
         "introduced": [brief(i) for i in by_severity(introduced)],
+        # On a route or state the baseline did not audit, so nothing says the change brought it.
+        "new_scope": [brief(i) for i in by_severity(new_scope)],
         "persistent": [brief(i) for i in by_severity(persistent)],
         "needs_review": [brief(i) for i in by_severity(needs_review)],
         "out_of_scope": len(out_of_scope),
@@ -110,11 +128,12 @@ def render_markdown(result: dict) -> str:
     lines.append(f"- Fixed: **{len(result['fixed'])}**")
     lines.append(f"- Introduced: **{len(result['introduced'])}**")
     lines.append(f"- Persistent: **{len(result['persistent'])}**")
+    lines.append(f"- On routes/states the baseline did not audit: {len(result.get('new_scope', []))}")
     lines.append(f"- Agent findings to re-check (no semantic review in this run): {len(result['needs_review'])}")
-    lines.append(f"- Baseline issues outside this run's routes/states/widths: {result['out_of_scope']}")
-    for title, key in (("Introduced", "introduced"), ("Persistent", "persistent"),
+    lines.append(f"- Baseline issues not fully looked at (other routes/states/widths, or a capped check): {result['out_of_scope']}")
+    for title, key in (("Introduced", "introduced"), ("New scope (not in the baseline)", "new_scope"), ("Persistent", "persistent"),
                        ("Agent findings to re-check", "needs_review"), ("Fixed", "fixed")):
-        if result[key]:
+        if result.get(key):
             lines += ["", f"## {title}", ""]
             for issue in result[key]:
                 widths = issue.get("widths") or []

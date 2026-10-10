@@ -42,6 +42,19 @@ def slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40] or "state"
 
 
+def auto_state_id(kind: str, label: str, selector: str | None = None) -> str:
+    """A discovered state's id, part of its issues' signatures. Counts in a label ("Cart (3)",
+    "2 new messages") change between runs, so digits are left out; two triggers that read
+    the same are told apart by the last step of their selector."""
+    name = slug(re.sub(r"\d+", " ", label))
+    if name == "state":
+        name = kind
+    if selector:
+        tail = re.sub(r":nth-of-type\(\d+\)", "", selector.split(" > ")[-1])
+        name = f"{name}-{slug(tail)}"
+    return f"{kind}-{name}"
+
+
 def default_state(route: str) -> State:
     return State(id="default", route=route, kind="default", label="Initial page")
 
@@ -179,9 +192,11 @@ def discover(page, cfg, route: str) -> list[State]:
                 continue
             changes, clean = _changes_dom(page, cfg, route, selector, width, height, clean)
             if changes:
-                state = State(id=f"{candidate['kind']}-{slug(candidate['label'])}", route=route, kind="auto",
+                state = State(id=auto_state_id(candidate["kind"], candidate["label"]), route=route, kind="auto",
                               label=f"{candidate['kind']}: {candidate['label']}", actions=[{"click": selector}],
                               trigger=selector, applies_to=applies_to)
+                if any(s.id == state.id for s in found):
+                    state.id = auto_state_id(candidate["kind"], candidate["label"], selector)
                 if any(s.id == state.id for s in found):
                     state.id = f"{state.id}-{len(found) + 1}"
                 found.append(state)

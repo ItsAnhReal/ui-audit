@@ -104,6 +104,8 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
     captures: list[dict] = []
     state_records: list[dict] = []
     coverage: dict[str, list[int]] = {}
+    # Per coverage key, the checks the probe capped and the widths where it did.
+    truncated: dict[str, dict[str, set[int]]] = {}
     route_records: list[dict] = []
     errors: list[str] = []
     all_breakpoints: set[int] = set()
@@ -310,6 +312,8 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                         _results[width] = result
                         for raw in result["issues"]:
                             issue_set.observe(raw, _path, _state.id, width, engine)
+                        for check in result.get("truncated") or {}:
+                            truncated.setdefault(coverage_key(_path, _state.id, engine), {}).setdefault(check, set()).add(width)
                         return sweep_signature(result)
 
                     try:
@@ -397,6 +401,9 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
         "states": state_records,
         "breakpoints": sorted(all_breakpoints),
         "coverage": coverage,
+        # Same keys as coverage: check → widths where the probe did not report or look at everything.
+        "coverage_truncated": {key: {check: sorted(widths) for check, widths in sorted(checks.items())}
+                               for key, checks in truncated.items()},
         "captures": captures,
         "issues": issues,
         "errors": errors,
