@@ -116,7 +116,11 @@ def free_port():
 def test_app_is_started_waited_for_and_stopped(tmp_path):
     port = free_port()
     url = f"http://127.0.0.1:{port}/"
-    app = ci.App(f"{sys.executable} -m http.server {port} --bind 127.0.0.1", tmp_path, tmp_path / "app.log")
+    # A bare TCPServer: `python -m http.server` resolves the host name first, which can stall on macOS runners.
+    (tmp_path / "serve.py").write_text(
+        "import http.server, socketserver, sys\n"
+        "socketserver.TCPServer(('127.0.0.1', int(sys.argv[1])), http.server.SimpleHTTPRequestHandler).serve_forever()\n")
+    app = ci.App(f'"{sys.executable}" -u serve.py {port}', tmp_path, tmp_path / "app.log")
     app.start(url, timeout=20)
     assert ci._answers(url)
     app.stop(url)
