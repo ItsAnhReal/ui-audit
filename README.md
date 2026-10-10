@@ -106,9 +106,17 @@ The server listens on 127.0.0.1 only, answers only to `127.0.0.1` and `localhost
 | `small-target` | P2 below 768px, else P3 | Pointer target smaller than 24×24px and closer than the WCAG 2.5.8 spacing exception allows to another target; inline text links excluded |
 | `unnamed-control` | P2 | No accessible name |
 | `console-error`, `failed-resource` | P2 | Runtime errors while loading or entering a state; an error logged while a state opened points at the dialog or menu that opened |
+| `viewport-meta` | P1 / P2 | No meta viewport, or one without `width=device-width` (P1); one that blocks zooming with `user-scalable=no` or `maximum-scale` under 2 (P2). Once per route |
+| `sticky-covers-viewport` | P2 | Below 768px, fixed and sticky bars at the top and bottom together cover more than 30% of the screen height |
+| `fixed-covers-end` | P2 | Scrolled to the end, a fixed bottom bar lies over the page's last text or control (content in an app's own scroll area, dialogs and consent banners are left out) |
+| `small-input-font` | P3 | Below 768px, text in an enabled, editable field is under 16px, so iOS zooms in on focus |
+| `tiny-text` | P3 | Text under 12px; footnote marks (`sup`, `sub`), `aria-hidden` and screen-reader-only text, SVG labels and badges of up to three characters are left out |
+| `distorted-image` / `broken-image` | P2 | An image drawn in an aspect ratio more than 5% off its picture (`object-fit` other than `fill` and SVG are fine), or one that did not load |
 | `semantic-*` | agent-assigned | Findings merged from the agent's review, labelled `origin: agent` |
 
 The three overflow checks are rated one step lower when the overflow is 4px or less, and one more step when it only occurs below 360px, the narrowest width most phones in use have. They are grouped as one cause in the report.
+
+A `horizontal-overflow` on an element names its cause where it is clear (a transform, a negative margin or offset, `100vw` that includes the scrollbar, a flex item that cannot shrink, a fixed or minimum width), in the message and as `cause` in report.json. When `overflow-x: hidden` on `html` or `body` hides the overflow, the message says the content is cut off rather than that the page scrolls.
 
 Deterministic findings are measurements. They can still be intentional; add those selectors to `[checks] ignore_selectors`.
 
@@ -140,6 +148,10 @@ A full audit sweeps every route and every opened menu, tab and dialog across the
 ## Browsers
 
 Audits run in Chromium. `--browsers chromium,webkit,firefox` (or `browsers = [...]` in `ui-audit.toml`) also runs them in WebKit, the engine behind Safari, and Firefox; install those once with `playwright install webkit firefox`. The first browser finds the routes and states, the others audit the same ones. A defect seen in several browsers is one finding; each finding lists its `browsers`, and the viewer marks the ones that show up in some browsers only.
+
+## Phones
+
+Widths below 768px are measured in a context that emulates a phone in Chromium and WebKit: the meta viewport applies, touch is on, and `(hover: none)` and `(pointer: coarse)` styles match. It starts from the desktop context's cookies and storage, so a saved sign-in and a declined consent banner carry over. Firefox cannot emulate a phone and measures every width as a desktop. `[viewports] mobile_below` moves the limit; `0` measures every width as a desktop, as before.
 
 ## Accepting a finding
 

@@ -4,6 +4,8 @@
 
 - **Changed issue signatures** — compare against a fresh baseline after upgrading. Selectors leave out generated class names and ids (CSS Modules, styled-components, emotion, Svelte, styled-jsx, React `useId`, Radix), prefer `data-testid`/`data-test`/`data-cy`, stable ids and a control's role and `aria-label`, and are as short as is unique on the page. Discovered state ids leave out counts ("Cart (3)" is `expand-cart`), and console errors and failed requests are identified without query strings, bundle hashes, timestamps and ids (the message keeps the raw text).
 - `verify` no longer counts a finding as fixed where its check hit `max_issues_per_check` or the 400-control limit (recorded in report.json as `coverage_truncated`), and lists findings on routes or states the baseline did not audit as `new_scope` instead of introduced. Out-of-range numbers in `ui-audit.toml` are config errors, and a configured `0` (e.g. `min_target_size = 0`) is no longer replaced by the default.
+- Widths below 768px are measured as a phone in Chromium and WebKit (meta viewport, touch, `hover: none`); Firefox stays a desktop browser. `[viewports] mobile_below = 0` turns it off. A page without `width=device-width` in its meta viewport now lays out 980px wide on narrow widths, as on a real phone, and is reported once as `viewport-meta`.
+- New checks: `viewport-meta`, `sticky-covers-viewport`, `fixed-covers-end`, `small-input-font`, `tiny-text`, `distorted-image` and `broken-image`. A `horizontal-overflow` names its cause where it is clear (message and `cause`), and says when `overflow-x: hidden` on the page cuts the content off; existing signatures are unchanged.
 
 ## 0.1.0 — first public release
 
