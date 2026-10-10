@@ -25,10 +25,12 @@ classifiers = [
     "Topic :: Software Development :: Quality Assurance",
     "Topic :: Software Development :: Testing",
 ]
-dependencies = ["playwright>=1.45"]
+dependencies = ["playwright>=1.45,<2"]
 
 [project.urls]
 Homepage = "https://github.com/ItsAnhReal/ui-audit"
+Documentation = "https://github.com/ItsAnhReal/ui-audit#readme"
+Source = "https://github.com/ItsAnhReal/ui-audit"
 Issues = "https://github.com/ItsAnhReal/ui-audit/issues"
 Changelog = "https://github.com/ItsAnhReal/ui-audit/blob/main/CHANGELOG.md"
 
@@ -43,7 +45,7 @@ ui-audit = "ui_audit.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-ui_audit = ["probe.js", "skill/SKILL.md", "ui/*.html", "ui/*.css", "ui/*.js"]
+ui_audit = ["probe.js", "skill/SKILL.md", "ui/*.html", "ui/*.css", "ui/*.js", "demo/*.html", "demo/*.css", "demo/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -19,8 +19,9 @@ jobs:
         uses: ./
         with:
           url: http://localhost:8765
-          start: python3 -m http.server 8765 -d demo
-          args: --project-root demo --fast
+          # Base commits from before the demo moved into the package still have it at demo/.
+          start: python3 -m http.server 8765 -d "$(test -d src/ui_audit/demo && echo src/ui_audit/demo || echo demo)"
+          args: --project-root src/ui_audit/demo --fast
           # The demo's defects are planted, and a pull request that changes a check may change
           # what it finds; this job tests the action, not the demo.
           fail-on: never
@@ -35,7 +36,7 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: |
           set -x
-          test "$P1" -ge 2 && test "$P2" -ge 10        # demo/README.md lists the planted defects
+          test "$P1" -ge 2 && test "$P2" -ge 10        # src/ui_audit/demo/README.md lists the planted defects
           test -f "$REPORT_DIR/report.json" && test -f "$REPORT_DIR/index.html"
           grep -q "ui-audit" "$SUMMARY"
           if [ "$EVENT" = pull_request ]; then

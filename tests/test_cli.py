@@ -67,6 +67,50 @@ def test_like_reuses_an_earlier_runs_settings(tmp_path):
     assert main(["audit", "--like", str(tmp_path / "missing")]) == 2
 
 
+def test_demo_audits_the_bundled_site_and_ignores_the_folders_config(tmp_path, monkeypatch):
+    import socket
+    import tomllib
+    import urllib.request
+    from pathlib import Path
+
+    from ui_audit import cli
+
+    seen = {}
+
+    def fake_audit(args):
+        cfg, path = cli._load_config(args)
+        with urllib.request.urlopen(cfg.base_url + "/pricing.html") as response:  # served while the audit runs
+            seen.update(status=response.status, cfg=cfg, path=path, args=args)
+        return 0
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "ui-audit.toml").write_text('base_url = "http://localhost:3000"\nproject_root = "app"\n')
+    monkeypatch.setattr(cli, "cmd_audit", fake_audit)
+    with socket.socket() as taken:  # the default port in use: the demo moves to a free one
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        assert main(["demo", "--port", str(taken.getsockname()[1]), "--no-open"]) == 0
+    assert seen["status"] == 200 and seen["path"] is None
+    assert seen["cfg"].project_root == str(cli.DEMO_DIR) and seen["cfg"].output == ".ui-audit/demo"
+    assert seen["args"].open is False and seen["cfg"].states.sweep == "key"
+    with pytest.raises(OSError):  # stopped once the audit is done
+        urllib.request.urlopen(seen["cfg"].base_url, timeout=2)
+
+    # Every demo file ships in the wheel.
+    pyproject = tomllib.loads((Path(__file__).resolve().parent.parent / "pyproject.toml").read_text())
+    globs = pyproject["tool"]["setuptools"]["package-data"]["ui_audit"]
+    files = [p for p in cli.DEMO_DIR.iterdir()]
+    assert files and all(any(p.match(g.split("/")[-1]) for g in globs if g.startswith("demo/")) for p in files)
+
+
+def test_version_comes_from_the_installed_package():
+    from importlib.metadata import version
+
+    from ui_audit import __version__
+
+    assert __version__ == version("ui-audit")
+
+
 def test_missing_or_broken_inputs_are_one_line_usage_errors(tmp_path, capsys):
     run = tmp_path / "run"
     run.mkdir()
