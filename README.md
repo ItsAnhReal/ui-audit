@@ -160,11 +160,14 @@ Actions: `click`, `hover`, `fill` + `value`, `press`, `wait`, `wait_for`. For lo
 
 ## Faster runs
 
-A full audit sweeps every route and every opened menu, tab and dialog across the whole width range. Three ways to spend less:
+A full audit sweeps every route and every opened menu, tab and dialog across the whole width range. Four ways to spend less:
 
 - `--fast` (or `[states] sweep = "key"`) still sweeps each route's initial page fully, but probes opened states only at the presets, the breakpoints and the widths where the initial page changed.
 - `--changed-since <git ref>` audits only the routes that render a file changed since that ref. It reads which components each route rendered from a previous full report (`--baseline`, default: the output directory), which a dev build of React, Vue or Svelte reveals. A changed stylesheet, helper or component that no audited page rendered could affect anything, so then every route is audited; the command says which case applied.
 - `--no-annotate` saves each screenshot once instead of twice. The viewer draws the boxes itself; only the agent's review packet loses its annotated images.
+- `--workers N` (or `workers = N`) measures N routes at once, each in a browser of its own; `0` picks from the CPU count. Findings and their order are the same as with one. Routes are still found and compared one after another in the first browser, and the others start with its cookies and local storage. Leave it at 1 if the app rotates sign-in tokens on use: browsers sharing one session can sign each other out. The demo takes 43 s with one worker and 26 s with two.
+
+Analytics requests (Google Analytics, Plausible, Segment and similar) are turned away by default, so pages go idle sooner; `block_requests` lists more hosts to block, or `[]` to block none.
 
 ## Languages
 

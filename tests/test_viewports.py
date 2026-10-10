@@ -42,6 +42,21 @@ def test_sweep_refines_every_change_within_budget():
     assert unrefined.anomalies == []
 
 
+def test_a_defect_flickering_at_narrow_widths_leaves_budget_for_a_wide_boundary():
+    def probe(width: int):
+        found = {"wrap"} if width < 800 and (width // 80) % 2 else set()  # in and out every 80px
+        if width >= 1500:
+            found.add("wide-overflow")
+        return frozenset(found)
+
+    widths = viewports.sweep_widths(320, 1920, 80)
+    result = viewports.sweep(probe, widths, max_refinements=2)
+    assert sorted(result.anomalies) == [399, 400, 1499, 1500]
+    # With budget to spare, the remaining changes are refined from narrow to wide.
+    assert viewports.refinement_order(widths, result.signatures, 3) == [(320, 400), (400, 480), (1440, 1520)]
+    assert viewports.refinement_order(widths, result.signatures, 0) == []
+
+
 def test_select_captures_priority_and_cap():
     plans = viewports.select_captures(
         standard=[390, 768, 1366, 1920], breakpoint_widths=[389, 390, 391, 767, 768, 769],

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import os
+import queue
+import threading
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -14,9 +18,44 @@ from .issues import IssueSet, coverage_key, load_accepted, mark_accepted, sweep_
 from .sources import SourceIndex
 
 NOT_APPLICABLE = frozenset({"<state not applicable>"})
-# The sweep waits for running transitions (browser.settle) rather than for a fixed time.
+# The sweep waits for loading fonts and running transitions (browser.settle), and at least two
+# animation frames after each resize, rather than for a fixed time.
 SWEEP_SETTLE_MS = 0
 CANDIDATE_FACTOR = 8
+
+
+# Routes measured side by side when `workers = 0`: one per two CPUs, at most this many.
+AUTO_WORKERS_MAX = 4
+
+
+def worker_count(cfg: Config) -> int:
+    """How many routes are measured at once, each in a browser of its own."""
+    return cfg.workers or max(1, min(AUTO_WORKERS_MAX, (os.cpu_count() or 2) // 2))
+
+
+@dataclass
+class _RouteWork:
+    """What measuring one route adds to the report. It is kept apart and merged in the order
+    the routes were listed, so routes measured side by side report as if one after another."""
+    route: routes.Route
+    breakpoints: list[int]
+    baseline_errors: set[str]
+    issues: list[tuple[str, tuple, dict]] = field(default_factory=list)  # IssueSet calls, in order
+    finished: list[tuple[dict, str]] = field(default_factory=list)  # (state record, status)
+    captures: list[dict] = field(default_factory=list)
+    coverage: dict[str, list[int]] = field(default_factory=dict)
+    truncated: dict[str, dict[str, set[int]]] = field(default_factory=dict)
+    errors: list[str] = field(default_factory=list)
+    sources: set[str] = field(default_factory=set)
+    logs: list[str] = field(default_factory=list)
+    probes: int = 0
+    failure: Exception | None = None
+
+    def observe(self, *args, **kwargs) -> None:
+        self.issues.append(("observe", args, kwargs))
+
+    def runtime(self, *args, **kwargs) -> None:
+        self.issues.append(("runtime", args, kwargs))
 
 
 def _file_slug(route: str) -> str:
@@ -92,7 +131,13 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
     """Audit the app. `on_event(name, **data)` reports progress: "routes" once, then "route"
     as each route is measured, skipped or fails to load, and "state" as each state is done."""
     started = time.monotonic()
-    event = on_event or (lambda _name, **_data: None)
+    lock = threading.Lock()  # routes measured side by side report progress one at a time
+
+    def event(name: str, **data) -> None:
+        if on_event:
+            with lock:
+                on_event(name, **data)
+
     out_dir = Path(cfg.output)
     shots_dir = out_dir / "shots"
     shots_dir.mkdir(parents=True, exist_ok=True)
@@ -116,12 +161,12 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
     index = SourceIndex(Path(cfg.project_root))
     route_sources: dict[str, set[str]] = {}
 
-    def note_sources(page, path: str) -> None:
+    def note_sources(page, into: set[str]) -> None:
         try:
             found = page.evaluate("() => window.__uiAudit.sourceFiles()")
         except Exception:  # noqa: BLE001 - a page that navigated away has nothing to add
             return
-        route_sources.setdefault(path, set()).update(index.relative(f) for f in found)
+        into.update(index.relative(f) for f in found)
 
     # The first browser leads: it finds the routes, decides which repeat another, and finds
     # the states. The others audit exactly those routes and states, so their findings line up.
@@ -136,14 +181,74 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
         label = browser.LABELS[engine]
         where = (lambda path: path) if leading else (lambda path: f"{path} ({label})")
 
-        def finish(record: dict, path: str, status: str) -> None:
-            if leading:
-                record["status"] = status
-                state_records.append(record)
-                lead_records[(path, record["id"])] = record
-            elif (path, record["id"]) in lead_records:
-                lead_records[(path, record["id"])].setdefault("browsers", {})[engine] = status
-            event("state", path=path, state=record["id"], status=status)
+        def merge(work: _RouteWork) -> None:
+            nonlocal probe_count
+            if work.failure is not None:
+                raise work.failure
+            path = work.route.path
+            for name, args, kwargs in work.issues:
+                getattr(issue_set, name)(*args, **kwargs)
+            for record, status in work.finished:
+                if leading:
+                    record["status"] = status
+                    state_records.append(record)
+                    lead_records[(path, record["id"])] = record
+                elif (path, record["id"]) in lead_records:
+                    lead_records[(path, record["id"])].setdefault("browsers", {})[engine] = status
+            captures.extend(work.captures)
+            coverage.update(work.coverage)
+            for key, checks in work.truncated.items():
+                for check, widths in checks.items():
+                    truncated.setdefault(key, {}).setdefault(check, set()).update(widths)
+            errors.extend(work.errors)
+            route_sources.setdefault(path, set()).update(work.sources)
+            probe_count += work.probes
+
+        def measure(page, runtime, pending: list[_RouteWork], run_route) -> None:
+            """Measure the routes kept, in `workers` browsers at once, this one included.
+            Playwright's sync API belongs to the thread that started it, so each helper thread
+            runs a browser of its own, signed in and past the consent banner like this one."""
+            workers = min(worker_count(cfg), len(pending))
+            if workers <= 1:
+                for work in pending:
+                    run_route(page, runtime, work, log)
+                    merge(work)
+                return
+            todo: queue.SimpleQueue[_RouteWork] = queue.SimpleQueue()
+            for work in pending:
+                todo.put(work)
+            signed_in = page.context.storage_state()
+
+            def drain(page, runtime) -> None:
+                while True:
+                    try:
+                        work = todo.get_nowait()
+                    except queue.Empty:
+                        return
+                    try:
+                        run_route(page, runtime, work, work.logs.append)
+                    except Exception as exc:  # noqa: BLE001 - raised again when merged, as if sequential
+                        work.failure = exc
+                    with lock:  # each route's lines together, as it finishes
+                        for line in work.logs:
+                            log(line)
+
+            def helper() -> None:
+                try:
+                    with browser.session(cfg, engine, storage_state=signed_in) as (page, runtime):
+                        drain(page, runtime)
+                except Exception as exc:  # noqa: BLE001 - the routes are left to the other browsers
+                    with lock:
+                        log(f"{label}: a worker browser stopped ({str(exc).splitlines()[0][:160]})")
+
+            threads = [threading.Thread(target=helper, daemon=True) for _ in range(workers - 1)]
+            for thread in threads:
+                thread.start()
+            drain(page, runtime)
+            for thread in threads:
+                thread.join()
+            for work in pending:
+                merge(work)
 
         with browser.session(cfg, engine) as (page, runtime):
             if len(cfg.browsers) > 1:
@@ -179,6 +284,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
             seen_paths: dict[str, str] = {}
 
             measured = 0
+            pending: list[_RouteWork] = []
             for position, route in enumerate(route_list):
                 path = route.path
                 # max_routes bounds what is measured; CANDIDATE_FACTOR bounds how many pages are
@@ -230,18 +336,23 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                 if leading:
                     route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": True,
                                           "status": "audited", "content": content, **moved})
-                note_sources(page, path)
+                note_sources(page, route_sources.setdefault(path, set()))
                 if content["state"] != "ok":
                     log(f"{where(path)}: may not show its real content ({content['state']}: {content['detail']})")
                 measured += 1
                 breakpoints = page.evaluate("() => window.__uiAudit.breakpoints()")
                 all_breakpoints.update(breakpoints)
-                baseline_errors = set(runtime.console_errors) | set(runtime.failed_resources)
+                work = _RouteWork(route, breakpoints, set(runtime.console_errors) | set(runtime.failed_resources))
                 for message in runtime.console_errors:
-                    issue_set.runtime("console-error", path, "default", message, 1280, engine=engine)
+                    work.runtime("console-error", path, "default", message, 1280, engine=engine)
                 for message in runtime.failed_resources:
-                    issue_set.runtime("failed-resource", path, "default", message, 1280, engine=engine)
+                    work.runtime("failed-resource", path, "default", message, 1280, engine=engine)
+                pending.append(work)
 
+            def run_route(page, runtime, work: _RouteWork, say: Callable[[str], None]) -> None:
+                """Find the states of a route the lead browser kept (or take the lead's) and sweep
+                each one. Everything it finds goes into `work`, merged into the report later."""
+                path, breakpoints, baseline_errors = work.route.path, work.breakpoints, work.baseline_errors
                 initial_anomalies: set[int] = set()
                 if leading:
                     state_list = [states.default_state(path), *states.custom_states(cfg, path)]
@@ -249,14 +360,18 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     planned[path] = state_list
                 else:
                     state_list = planned[path]
-                log(f"{where(path)}: {len(state_list)} state(s), breakpoints {breakpoints or 'none'}")
+                say(f"{where(path)}: {len(state_list)} state(s), breakpoints {breakpoints or 'none'}")
                 event("route", path=path, status="measuring", states=len(state_list))
+
+                def finish(record: dict, status: str) -> None:
+                    work.finished.append((record, status))
+                    event("state", path=path, state=record["id"], status=status)
 
                 for state in state_list:
                     record = state.to_dict()
                     lo, hi = state.width_range(vc.min_width, vc.max_width)
                     if lo > hi:
-                        finish(record, path, "skipped: no widths in range")
+                        finish(record, "skipped: no widths in range")
                         continue
                     key_only = cfg.states.sweep == "key" and state.kind != "default" and not vc.widths
                     if vc.widths:
@@ -274,46 +389,46 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                             | (set(viewports.breakpoint_neighbors(breakpoints, lo, hi)) if vc.breakpoint_neighbors else set())
                         )
                     if not probe_widths:
-                        finish(record, path, "skipped: no widths in range")
+                        finish(record, "skipped: no widths in range")
                         continue
 
-                    first = states.first_width(page, cfg, state, probe_widths)
-                    if first is None:
-                        finish(record, path, "skipped: its control is not shown at any width")
-                        continue
                     runtime.clear()
-                    if not states.apply(page, cfg, state, first, viewports.height_for(first)):
-                        finish(record, path, "skipped: could not be applied")
+                    first, loaded = states.first_width(page, cfg, state, probe_widths)
+                    if first is None:
+                        finish(record, "skipped: its control is not shown at any width")
+                        continue
+                    if not loaded:
+                        runtime.clear()
+                    if not states.apply(page, cfg, state, first, viewports.height_for(first), loaded):
+                        finish(record, "skipped: could not be applied")
                         continue
                     if state.kind != "default":
-                        note_sources(page, path)  # an opened dialog or menu brings its own components
+                        note_sources(page, work.sources)  # an opened dialog or menu brings its own components
                         new_errors = [m for m in runtime.console_errors if m not in baseline_errors]
                         # The error came with opening this state, so the component that opened is where to look.
                         layer = (page.evaluate("t => window.__uiAudit.layerInfo(t)", state.trigger)
                                  if new_errors else None)
                         for message in new_errors:
-                            issue_set.runtime("console-error", path, state.id, message, first, hints=layer, engine=engine)
+                            work.runtime("console-error", path, state.id, message, first, hints=layer, engine=engine)
                         for message in runtime.failed_resources:
                             if message not in baseline_errors:
-                                issue_set.runtime("failed-resource", path, state.id, message, first, engine=engine)
+                                work.runtime("failed-resource", path, state.id, message, first, engine=engine)
 
                     results: dict[int, dict] = {}
                     not_applicable: set[int] = set()
 
-                    def probe(width: int, _path=path, _state=state, _results=results,
-                              _na=not_applicable) -> frozenset[str]:
-                        nonlocal probe_count
+                    def probe(width: int, _state=state, _results=results, _na=not_applicable) -> frozenset[str]:
                         browser.resize(page, width, viewports.height_for(width), min(cfg.settle_ms, SWEEP_SETTLE_MS))
-                        probe_count += 1
+                        work.probes += 1
                         if _state.trigger and not page.evaluate("s => window.__uiAudit.isTriggerVisible(s)", _state.trigger):
                             _na.add(width)
                             return NOT_APPLICABLE
                         result = page.evaluate("o => window.__uiAudit.probe(o)", opts)
                         _results[width] = result
                         for raw in result["issues"]:
-                            issue_set.observe(raw, _path, _state.id, width, engine)
+                            work.observe(raw, path, _state.id, width, engine)
                         for check in result.get("truncated") or {}:
-                            truncated.setdefault(coverage_key(_path, _state.id, engine), {}).setdefault(check, set()).add(width)
+                            work.truncated.setdefault(coverage_key(path, _state.id, engine), {}).setdefault(check, set()).add(width)
                         return sweep_signature(result)
 
                     try:
@@ -322,11 +437,11 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                         if state.kind == "default":
                             initial_anomalies.update(sweep.anomalies)
                     except Exception as exc:  # noqa: BLE001 - one broken state must not end the audit
-                        coverage[coverage_key(path, state.id, engine)] = sorted(results)
-                        errors.append(f"{where(path)} [{state.id}]: {str(exc)[:160]}")
-                        finish(record, path, f"failed: {exc.__class__.__name__}")
+                        work.coverage[coverage_key(path, state.id, engine)] = sorted(results)
+                        work.errors.append(f"{where(path)} [{state.id}]: {str(exc)[:160]}")
+                        finish(record, f"failed: {exc.__class__.__name__}")
                         continue
-                    coverage[coverage_key(path, state.id, engine)] = sorted(results)
+                    work.coverage[coverage_key(path, state.id, engine)] = sorted(results)
 
                     standard = [w for _, w, _ in STANDARD_VIEWPORTS if lo <= w <= hi]
                     if vc.widths:
@@ -343,14 +458,16 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
 
                     for plan in plans:
                         try:
-                            captures.append(_capture(page, cfg, shots_dir, out_dir, path, state, plan, results, probe, engine))
+                            work.captures.append(_capture(page, cfg, shots_dir, out_dir, path, state, plan, results, probe, engine))
                         except Exception as exc:  # noqa: BLE001 - keep the other screenshots
-                            errors.append(f"{where(path)} [{state.id}] {plan.width}px: screenshot failed ({str(exc)[:120]})")
+                            work.errors.append(f"{where(path)} [{state.id}] {plan.width}px: screenshot failed ({str(exc)[:120]})")
                     if leading:
                         record["probed_widths"] = len(results)
                         record["captures"] = len(plans)
-                    finish(record, path, "audited")
-                    log(f"  {state.id}: {len(results)} widths probed, {len(plans)} captured")
+                    finish(record, "audited")
+                    say(f"  {state.id}: {len(results)} widths probed, {len(plans)} captured")
+
+            measure(page, runtime, pending, run_route)
 
     # Only browsers that finished count as audited: a finding is "only in" some browsers only
     # where the others were really measured.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import glob
 import os
+import re
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from importlib import resources
@@ -60,10 +61,40 @@ def launch(playwright, executable_path: str = "", headless: bool = True, engine:
         raise
 
 
+# Analytics that only count visits and render nothing. Their requests keep a page from going
+# network-idle, so `block_requests = ["trackers"]` (the default) turns them away. Ads and tag
+# managers are not on the list: they can put banners and boxes on the page.
+TRACKER_HOSTS = (
+    "google-analytics.com", "analytics.google.com", "stats.g.doubleclick.net", "plausible.io",
+    "static.cloudflareinsights.com", "cdn.segment.com", "api.segment.io", "cdn.mxpnl.com",
+    "api-js.mixpanel.com", "cdn.amplitude.com", "api2.amplitude.com", "clarity.ms", "bat.bing.com",
+    "snap.licdn.com", "js-agent.newrelic.com", "bam.nr-data.net", "cdn.heapanalytics.com",
+    "heapanalytics.com", "edge.fullstory.com", "rs.fullstory.com",
+    "browser-intake-datadoghq.com", "browser-intake-datadoghq.eu",
+)
+
+
+def blocked_requests(entries: list[str], base_url: str) -> re.Pattern | None:
+    """A pattern for request URLs to turn away: "trackers" stands for TRACKER_HOSTS, anything
+    else is a host name, matched with its subdomains. The app's own host is never blocked."""
+    own = (urlparse(base_url).hostname or "").lower()
+    hosts = []
+    for entry in entries:
+        for host in TRACKER_HOSTS if entry == "trackers" else [entry.strip().lower()]:
+            if host and host != own and not own.endswith("." + host) and host not in hosts:
+                hosts.append(host)
+    if not hosts:
+        return None
+    return re.compile(r"^[a-z][a-z0-9+.-]*://(?:[^/?#@]*@)?(?:[^/?#@]*\.)?(?:"
+                      + "|".join(re.escape(h) for h in hosts) + r")(?::\d+)?(?:[/?#]|$)", re.IGNORECASE)
+
+
 @dataclass
 class RuntimeLog:
     console_errors: list[str] = field(default_factory=list)
     failed_resources: list[str] = field(default_factory=list)
+    # Requests turned away on purpose (block_requests); their failure is not the app's.
+    blocked: re.Pattern | None = None
 
     def on_console(self, message) -> None:
         # "Failed to load resource" repeats a failed request, which is
@@ -74,6 +105,8 @@ class RuntimeLog:
     def on_failure(self, url: str, reason: str) -> None:
         # Browsers request /favicon.ico on their own; its absence is noise.
         if urlparse(url).path == "/favicon.ico":
+            return
+        if self.blocked and self.blocked.search(url):
             return
         # The page cancelled the request itself (it navigated or unmounted); nothing failed.
         # Chromium, Firefox and WebKit each word that differently.
@@ -87,28 +120,34 @@ class RuntimeLog:
 
 
 @contextmanager
-def session(cfg, engine: str = "chromium"):
-    """Yield (page, runtime_log) with the probe script installed."""
+def session(cfg, engine: str = "chromium", storage_state: dict | None = None):
+    """Yield (page, runtime_log) with the probe script installed.
+
+    `storage_state` starts the browser with another session's cookies and storage (a worker
+    taking over routes); such a session leaves `cfg.storage_state` alone."""
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as playwright:
         browser = launch(playwright, cfg.browser_path, engine=engine)
         context_args = {"viewport": {"width": 1280, "height": 900}}
-        if cfg.storage_state:
-            context_args["storage_state"] = cfg.storage_state
+        if storage_state is not None or cfg.storage_state:
+            context_args["storage_state"] = storage_state if storage_state is not None else cfg.storage_state
         if cfg.locale:
             context_args["locale"] = cfg.locale
         context = browser.new_context(**context_args)
         context.add_init_script(PROBE_JS)
+        log = RuntimeLog(blocked=blocked_requests(cfg.block_requests, cfg.base_url))
+        if log.blocked:
+            # Sent to the browser as a pattern: requests that do not match are not intercepted.
+            context.route(log.blocked, lambda route: route.abort("blockedbyclient"))
         page = context.new_page()
-        log = RuntimeLog()
         page.on("console", log.on_console)
         page.on("pageerror", lambda exc: log.console_errors.append(str(exc)[:300]))
         page.on("requestfailed", lambda req: log.on_failure(req.url, str(req.failure)))
         page.on("response", lambda res: res.status >= 400 and log.on_failure(res.url, str(res.status)))
         try:
             yield page, log
-            if cfg.storage_state:
+            if cfg.storage_state and storage_state is None:
                 # Sign-in tokens rotate while the app runs; keep the newest ones so the next
                 # audit does not start from a token that has already been exchanged.
                 try:
@@ -167,24 +206,31 @@ def load(page, base_url: str, path: str, width: int, height: int, settle_ms: int
     return response
 
 
-# Waits for CSS transitions and animations that are about to end, so nothing is measured
-# mid-flight. Endless ones (spinners, marquees) and anything longer than the cap are not waited for.
-_QUIESCE_JS = """cap => new Promise(resolve => {
-  const deadline = performance.now() + cap;
+# Waits for web fonts that are still loading (a new width can bring in a font of its own), then
+# for CSS transitions and animations that are about to end, so nothing is measured mid-flight
+# or in a fallback font. Endless animations (spinners, marquees) and anything longer than the
+# caps are not waited for. With nothing loading or moving, this costs two animation frames.
+_QUIESCE_JS = """([cap, fontCap]) => new Promise(resolve => {
   const moving = () => document.getAnimations().some(a => {
     if (a.playState !== "running" || !a.effect) return false;
     const end = a.effect.getComputedTiming().endTime;
     return Number.isFinite(end) && end - (a.currentTime || 0) <= cap;
   });
-  const tick = () => (!moving() || performance.now() >= deadline) ? resolve() : requestAnimationFrame(tick);
-  requestAnimationFrame(() => requestAnimationFrame(tick));
+  const fonts = document.fonts && document.fonts.status === "loading"
+    ? Promise.race([document.fonts.ready, new Promise(r => setTimeout(r, fontCap))]) : Promise.resolve();
+  fonts.then(() => {
+    const deadline = performance.now() + cap;
+    const tick = () => (!moving() || performance.now() >= deadline) ? resolve() : requestAnimationFrame(tick);
+    requestAnimationFrame(() => requestAnimationFrame(tick));
+  });
 })"""
 QUIESCE_CAP_MS = 600
+FONTS_CAP_MS = 3000
 
 
 def settle(page, settle_ms: int) -> None:
-    """Let layout, transitions and fonts finish after a change."""
-    page.evaluate(_QUIESCE_JS, QUIESCE_CAP_MS)
+    """Let fonts, layout and transitions finish after a change."""
+    page.evaluate(_QUIESCE_JS, [QUIESCE_CAP_MS, FONTS_CAP_MS])
     if settle_ms:
         page.wait_for_timeout(settle_ms)
 
