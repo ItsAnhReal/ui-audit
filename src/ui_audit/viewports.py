@@ -61,7 +61,7 @@ def find_boundary(probe: Callable[[int], Signature], low: int, high: int,
         if sig == low_sig:
             low = mid
         else:
-            high, high_sig = mid, sig
+            high = mid
     return low, high, probes
 
 

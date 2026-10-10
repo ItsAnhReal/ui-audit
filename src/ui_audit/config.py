@@ -134,7 +134,7 @@ class ConfigError(ValueError):
     pass
 
 
-def _build(cls: type, data: dict[str, Any], where: str):
+def _build(cls: Any, data: dict[str, Any], where: str):
     known = cls.__dataclass_fields__
     unknown = sorted(set(data) - set(known))
     if unknown:

@@ -120,7 +120,7 @@ class SourceIndex:
     def relative(self, path: str) -> str:
         if path not in self._relative:
             try:
-                self._relative[path] = str(Path(path).resolve().relative_to(self.root.resolve()))
+                self._relative[path] = str(Path(path).resolve().relative_to(self.root.resolve()).as_posix())
             except (ValueError, OSError):
                 self._relative[path] = path
         return self._relative[path]
