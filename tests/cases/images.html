@@ -1,0 +1,17 @@
+<!-- expect: distorted-image=1 broken-image=1 -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>case</title><style>
+/* A 2:1 picture stretched square, and one whose data cannot be decoded. Pictures cropped with
+   object-fit, scaled in proportion, SVG and a 1px tracking pixel are fine. */
+body { margin: 0; padding: 24px; font: 16px/1.5 sans-serif; }
+img { display: block; margin: 8px 0; }
+.square { width: 120px; height: 120px; } .cover { width: 120px; height: 120px; object-fit: cover; }
+.even { width: 200px; height: auto; }
+</style></head><body>
+<img class="square" alt="Stretched" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAIAAADwyuo0AAAAEElEQVR4nGOwbvoGRwzIHACq+g2Z2ahgEAAAAABJRU5ErkJggg==">
+<img class="cover" alt="Cropped" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAIAAADwyuo0AAAAEElEQVR4nGOwbvoGRwzIHACq+g2Z2ahgEAAAAABJRU5ErkJggg==">
+<img class="even" alt="Scaled" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAIAAADwyuo0AAAAEElEQVR4nGOwbvoGRwzIHACq+g2Z2ahgEAAAAABJRU5ErkJggg==">
+<img class="square" alt="Icon" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='10'%3E%3Crect width='20' height='10'/%3E%3C/svg%3E">
+<img width="1" height="1" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAIAAADwyuo0AAAAEElEQVR4nGOwbvoGRwzIHACq+g2Z2ahgEAAAAABJRU5ErkJggg==">
+<img alt="Broken" width="120" height="40" src="data:image/png;base64,iVBORw0KGgo=">
+<img alt="">
+</body></html>

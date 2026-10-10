@@ -1,0 +1,10 @@
+<!-- expect: fixed-covers-end=1 -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>case</title><style>
+/* The page leaves no room for the fixed bar, so scrolled to the end it hides the last link. */
+body { margin: 0; padding: 24px 24px 0; font: 16px/1.5 sans-serif; }
+main p { height: 1200px; margin: 0; }
+.bar { position: fixed; left: 0; right: 0; bottom: 0; height: 72px; background: #eee; }
+</style></head><body>
+<main><p>Article text.</p><a href="#more">Read the next article</a></main>
+<div class="bar"><button>Subscribe</button></div>
+</body></html>

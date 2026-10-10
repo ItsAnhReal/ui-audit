@@ -10,7 +10,7 @@ from ui_audit.config import from_dict
 
 pytestmark = [pytest.mark.e2e, pytest.mark.usefixtures("chromium_available")]
 
-HEAD = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>t</title><style>body { margin: 0; font: 16px/1.5 sans-serif; }'
+HEAD = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>t</title><style>body { margin: 0; font: 16px/1.5 sans-serif; }'
 
 # A menu button that only shows from 1024px, found at 1280px. Opening its sheet logs an error.
 DESKTOP_SHEET = HEAD + """

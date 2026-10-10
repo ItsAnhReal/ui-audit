@@ -87,7 +87,7 @@ def test_fix_is_verified_by_targeted_rerun(demo_site, tmp_path):
     assert changed[880] > 0 and changed[790] == 0
 
 
-LAYERED = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Layered</title><style>
+LAYERED = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Layered</title><style>
 body { margin: 0; font: 16px/1.5 sans-serif; }
 .field { position: relative; width: 280px; margin: 24px; }
 .field input { width: 100%; height: 44px; box-sizing: border-box; }
@@ -143,7 +143,7 @@ def test_not_found_and_repeated_routes_are_skipped(demo_site, tmp_path):
     assert [r["status"] for r in rerun["routes"]] == ["audited"]
 
 
-CONSENT = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Consent</title><style>
+CONSENT = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Consent</title><style>
 body { margin: 0; font: 16px/1.5 sans-serif; }
 main a { display: block; width: 220px; height: 44px; margin: 700px 24px 0; }
 #banner { position: fixed; left: 0; right: 0; bottom: 0; padding: 16px; background: #eee; }
@@ -202,7 +202,7 @@ def test_saved_session_is_reused_by_the_audit(demo_site, tmp_path):
 
 def test_pages_without_real_content_are_called_out(demo_site, tmp_path):
     url, site = demo_site
-    page = "<!doctype html><html lang=en><head><meta charset=utf-8><title>t</title></head><body>{}</body></html>"
+    page = "<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content=width=device-width,initial-scale=1><title>t</title></head><body>{}</body></html>"
     (site / "gone.html").write_text(page.format("<h1>This menu is temporarily unavailable.</h1><p>" + "Try later. " * 30 + "</p>"))
     (site / "thin.html").write_text(page.format("<p>Coming soon.</p>"))
     (site / "busy.html").write_text(page.format('<main aria-busy="true"><p>' + "Loading the dashboard. " * 20 + "</p></main>"))
@@ -241,7 +241,7 @@ def test_locale_sets_the_browser_language(demo_site, tmp_path):
 
 def test_same_text_in_different_markup_is_audited_as_its_own_page(demo_site, tmp_path):
     url, site = demo_site
-    page = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Save</title></head><body><main>{}</main></body></html>'
+    page = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Save</title></head><body><main>{}</main></body></html>'
     (site / "save-button.html").write_text(page.format("<button>Save</button>"))
     (site / "save-link.html").write_text(page.format('<a href="#top">Save</a>'))
     cfg = config(url, site, tmp_path / "run", routes={"include": ["/save-button.html", "/save-link.html"]},
@@ -250,7 +250,7 @@ def test_same_text_in_different_markup_is_audited_as_its_own_page(demo_site, tmp
     assert [r["status"] for r in report["routes"]] == ["audited", "audited"]
 
 
-PROMO = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Promo</title><style>
+PROMO = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Promo</title><style>
 body { margin: 0; font: 16px/1.5 sans-serif; }
 #promo { width: 600px; padding: 8px; background: #fe0; }
 </style></head><body>
@@ -287,7 +287,7 @@ def test_key_width_mode_probes_a_range_without_presets(demo_site, tmp_path):
 
 def test_page_overflow_names_the_text_or_hidden_box_behind_it(demo_site, tmp_path):
     url, site = demo_site
-    page = '<!doctype html><html lang="de"><head><meta charset="utf-8"><title>t</title><style>body {{ margin: 0; }}</style></head><body>{}</body></html>'
+    page = '<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>t</title><style>body {{ margin: 0; }}</style></head><body>{}</body></html>'
     (site / "long-word.html").write_text(page.format('<h1 style="font-size: 32px">Kategorieaufschlüsselungsübersicht</h1>'))
     (site / "tooltip.html").write_text(page.format(
         '<p>Chart</p><div style="position: absolute; left: 500px; top: 0; width: 120px; visibility: hidden">Tooltip</div>'))
@@ -298,3 +298,81 @@ def test_page_overflow_names_the_text_or_hidden_box_behind_it(demo_site, tmp_pat
     assert word["selector"].endswith("h1") and "Kategorieaufschlüsselungsübersicht" in word["message"]
     [hidden] = found(report, "horizontal-overflow", "/tooltip.html")
     assert hidden["selector"].endswith("div") and "invisible element" in hidden["message"]
+
+
+def test_phone_checks_find_the_signup_page_defects(demo_site, tmp_path):
+    url, site = demo_site
+    cfg = config(url, site, tmp_path / "run", routes={"include": ["/signup.html"]}, states={"auto": False},
+                 viewports={"widths": [390, 1366]})
+    report = audit.run(cfg, log=lambda _: None)
+    route = "/signup.html"
+    [meta] = found(report, "viewport-meta", route)
+    assert meta["severity"] == "P2" and meta["widths"] == [390] and "zooming" in meta["message"]
+    [bars] = found(report, "sticky-covers-viewport", route)
+    assert bars["widths"] == [390] and bars["selector"] == "header.top"
+    [end] = found(report, "fixed-covers-end", route)
+    # The last lines; with Windows' font metrics the bar also reaches the paragraph above the legal line.
+    assert end["selector"] == "div.cta" and ("By creating an account" in end["message"] or "We keep your data" in end["message"])
+    fields = found(report, "small-input-font", route)
+    assert sorted(i["selector"] for i in fields) == ["#email", "#password"] and all(i["widths"] == [390] for i in fields)
+    [tiny] = found(report, "tiny-text", route)
+    assert tiny["selector"] == "p.legal" and tiny["widths"] == [390, 1366]
+    assert [i["selector"] for i in found(report, "distorted-image", route)] == ["img.photo"]
+    assert len(found(report, "broken-image", route)) == 1
+    for issue in report["issues"]:
+        assert issue["evidence"], issue["signature"]
+
+
+TOUCH = """<!doctype html><html lang="en"><head><meta charset="utf-8">{meta}<title>Touch</title><style>
+body {{ margin: 0; font: 16px/1.5 sans-serif; }}
+.swipe {{ display: none; }}
+@media (hover: none) and (pointer: coarse) {{ .swipe {{ display: block; width: 520px; }} }}
+</style></head><body><p>{text}</p><div class="swipe">Swipe for more plans</div></body></html>"""
+
+
+def test_narrow_widths_are_measured_as_a_phone(demo_site, tmp_path):
+    url, site = demo_site
+    (site / "touch.html").write_text(TOUCH.format(text="Our plans for every team.", meta='<meta name="viewport" content="width=device-width, initial-scale=1">'))
+    (site / "desktop-only.html").write_text(TOUCH.format(text="Our plans for big teams.", meta=""))
+    widths = {"widths": [390, 1024]}
+    cfg = config(url, site, tmp_path / "run", routes={"include": ["/touch.html", "/desktop-only.html"]},
+                 states={"auto": False}, viewports=widths)
+    report = audit.run(cfg, log=lambda _: None)
+    # Touch styles apply below 768px only, where the page is measured as a phone.
+    [swipe] = found(report, "horizontal-overflow", "/touch.html")
+    assert swipe["widths"] == [390] and swipe["selector"].endswith("div.swipe")
+    assert not found(report, "viewport-meta", "/touch.html")
+    # Without a meta viewport a phone lays the page out 980px wide: the swipe row fits, and the
+    # missing tag is the finding, once for the route.
+    [meta] = found(report, "viewport-meta", "/desktop-only.html")
+    assert meta["severity"] == "P1" and meta["widths"] == [390]
+    assert not found(report, "horizontal-overflow", "/desktop-only.html")
+
+    desktop = audit.run(config(url, site, tmp_path / "desktop", routes={"include": ["/touch.html"]},
+                               states={"auto": False}, viewports={**widths, "mobile_below": 0}), log=lambda _: None)
+    assert not found(desktop, "horizontal-overflow", "/touch.html")
+
+
+def test_overflow_message_names_the_cause(demo_site, tmp_path):
+    url, site = demo_site
+    page = ('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, '
+            'initial-scale=1"><title>t</title><style>body {{ margin: 0; font: 16px/1.5 sans-serif; }}</style></head><body>{}</body></html>')
+    cases = {
+        "shifted.html": ('<div style="transform: translateX(80px)">Moved panel</div>', "transform moves it 80px"),
+        "pulled.html": ('<div style="margin-right: -80px">Pulled panel</div>', "negative margin-right"),
+        "fixed-width.html": ('<div style="width: 600px">Wide panel</div>', "fixed width of 600px"),
+        "flex-url.html": ('<div style="display: flex; font-size: 24px"><div>https://example.com/docs/getting-started/installation</div>'
+                          '<div>Copy</div></div>', "min-width: auto"),
+        "clipped.html": ('<style>body { overflow-x: hidden; }</style><div style="width: 600px">Wide panel</div>',
+                         "cut off by overflow-x: hidden"),
+    }
+    for name, (body, _) in cases.items():
+        (site / name).write_text(page.format(body))
+    cfg = config(url, site, tmp_path / "run", routes={"include": [f"/{name}" for name in cases], "dedupe": False},
+                 states={"auto": False}, viewports={"widths": [390, 1024]})
+    report = audit.run(cfg, log=lambda _: None)
+    for name, (_, clause) in cases.items():
+        [issue] = found(report, "horizontal-overflow", f"/{name}")
+        assert clause in issue["message"], (name, issue["message"])
+        assert name == "clipped.html" or issue["cause"] in issue["message"]
+    assert "scrolls sideways" not in found(report, "horizontal-overflow", "/clipped.html")[0]["message"]

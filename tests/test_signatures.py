@@ -7,7 +7,7 @@ from ui_audit.config import from_dict
 
 pytestmark = [pytest.mark.e2e, pytest.mark.usefixtures("chromium_available")]
 
-HEAD = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>t</title><style>
+HEAD = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>t</title><style>
 body { margin: 0; padding: 24px; font: 16px/1.5 sans-serif; }
 p { width: 200px; height: 30px; overflow: hidden; }
 .tools { display: flex; gap: 4px; } .tools button { width: 18px; height: 18px; padding: 0; }"""

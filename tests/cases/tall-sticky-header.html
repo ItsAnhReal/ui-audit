@@ -1,0 +1,14 @@
+<!-- expect: sticky-covers-viewport=1 -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>case</title><style>
+/* On a phone the fixed header and the fixed bottom bar take about 40% of the screen. */
+body { margin: 0; padding: 0 24px; font: 16px/1.5 sans-serif; }
+.head { position: fixed; top: 0; left: 0; right: 0; height: 220px; background: #eee; }
+.tabs { position: fixed; bottom: 0; left: 0; right: 0; height: 120px; background: #ddd; }
+main { padding: 240px 0 140px; }
+main p { height: 600px; }
+@media (min-width: 768px) { .head { height: 64px; } .tabs { height: 56px; } main { padding: 80px 0; } }
+</style></head><body>
+<div class="head"><a href="#a">Home</a></div>
+<main><p>Long article text.</p><p>More text.</p></main>
+<nav class="tabs"><a href="#b">Feed</a> <a href="#c">Inbox</a></nav>
+</body></html>

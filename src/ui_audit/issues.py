@@ -26,7 +26,17 @@ DETERMINISTIC_CHECKS = {
     "unnamed-control": "A control has no accessible name.",
     "console-error": "The page logged a JavaScript error.",
     "failed-resource": "A request failed or returned an HTTP error.",
+    "viewport-meta": "The page has no usable meta viewport for phones, or it blocks zooming.",
+    "sticky-covers-viewport": "Fixed and sticky bars cover too much of a phone screen.",
+    "fixed-covers-end": "A fixed bottom bar covers the end of the page.",
+    "small-input-font": "A text field's font is under 16px, so iOS zooms in on focus.",
+    "tiny-text": "Text is smaller than 12px.",
+    "distorted-image": "An image is drawn in another aspect ratio than its picture.",
+    "broken-image": "An image did not load.",
 }
+
+# Findings that do not depend on the layout at a width; the sweep does not refine on them.
+NOT_LAYOUT_CHECKS = {"small-target", "unnamed-control", "small-input-font", "tiny-text", "broken-image"}
 
 
 # One overflow shows up as the page scrolling sideways and as content cut off at an edge.
@@ -142,6 +152,8 @@ class IssueSet:
         if width not in seen_at:
             seen_at.append(width)
             seen_at.sort()
+        if raw.get("cause") and not issue.get("cause"):
+            issue["cause"] = raw["cause"]  # what makes an overflowing element stick out
         key = rect_key(width, engine)
         if raw.get("rect") and key not in issue["rects"]:
             issue["rects"][key] = raw["rect"]
@@ -235,4 +247,4 @@ def mark_accepted(issues: list[dict], accepted: dict[str, dict]) -> int:
 def sweep_signature(probe_result: dict) -> frozenset[str]:
     """What the sweep compares between widths: which defects exist where."""
     return frozenset(f"{i['check']}|{i['selector']}" for i in probe_result["issues"]
-                     if i["check"] not in {"small-target", "unnamed-control"})
+                     if i["check"] not in NOT_LAYOUT_CHECKS)

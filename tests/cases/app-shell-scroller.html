@@ -1,0 +1,12 @@
+<!-- expect: clean -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>case</title><style>
+/* An app shell: the page does not scroll, its main area does, and leaves room for the bottom
+   nav at its end. Rows behind the nav now scroll out from under it. */
+body { margin: 0; font: 16px/1.5 sans-serif; }
+main { height: 100vh; overflow-y: auto; padding: 0 24px 72px; box-sizing: border-box; }
+main a { display: block; height: 80px; }
+nav { position: fixed; left: 0; right: 0; bottom: 0; height: 64px; background: #eee; }
+</style></head><body>
+<main><a href="#1">Row 1</a><a href="#2">Row 2</a><a href="#3">Row 3</a><a href="#4">Row 4</a><a href="#5">Row 5</a><a href="#6">Row 6</a><a href="#7">Row 7</a><a href="#8">Row 8</a><a href="#9">Row 9</a><a href="#10">Row 10</a><a href="#11">Row 11</a><a href="#12">Row 12</a></main>
+<nav><a href="#feed">Feed</a></nav>
+</body></html>

@@ -22,6 +22,8 @@ NOT_APPLICABLE = frozenset({"<state not applicable>"})
 # animation frames after each resize, rather than for a fixed time.
 SWEEP_SETTLE_MS = 0
 CANDIDATE_FACTOR = 8
+# Below this width a page is read as a phone layout, also when phone emulation is turned off.
+MOBILE_WIDTH = 768
 
 
 # Routes measured side by side when `workers = 0`: one per two CPUs, at most this many.
@@ -204,29 +206,29 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
             route_sources.setdefault(path, set()).update(work.sources)
             probe_count += work.probes
 
-        def measure(page, runtime, pending: list[_RouteWork], run_route) -> None:
+        def measure(session: browser.Session, pending: list[_RouteWork], run_route) -> None:
             """Measure the routes kept, in `workers` browsers at once, this one included.
             Playwright's sync API belongs to the thread that started it, so each helper thread
             runs a browser of its own, signed in and past the consent banner like this one."""
             workers = min(worker_count(cfg), len(pending))
             if workers <= 1:
                 for work in pending:
-                    run_route(page, runtime, work, log)
+                    run_route(session, work, log)
                     merge(work)
                 return
             todo: queue.SimpleQueue[_RouteWork] = queue.SimpleQueue()
             for work in pending:
                 todo.put(work)
-            signed_in = page.context.storage_state()
+            signed_in = session[0].context.storage_state()
 
-            def drain(page, runtime) -> None:
+            def drain(session: browser.Session) -> None:
                 while True:
                     try:
                         work = todo.get_nowait()
                     except queue.Empty:
                         return
                     try:
-                        run_route(page, runtime, work, work.logs.append)
+                        run_route(session, work, work.logs.append)
                     except Exception as exc:  # noqa: BLE001 - raised again when merged, as if sequential
                         work.failure = exc
                     with lock:  # each route's lines together, as it finishes
@@ -235,8 +237,8 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
 
             def helper() -> None:
                 try:
-                    with browser.session(cfg, engine, storage_state=signed_in) as (page, runtime):
-                        drain(page, runtime)
+                    with browser.session(cfg, engine, storage_state=signed_in) as helper_session:
+                        drain(helper_session)
                 except Exception as exc:  # noqa: BLE001 - the routes are left to the other browsers
                     with lock:
                         log(f"{label}: a worker browser stopped ({str(exc).splitlines()[0][:160]})")
@@ -244,13 +246,14 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
             threads = [threading.Thread(target=helper, daemon=True) for _ in range(workers - 1)]
             for thread in threads:
                 thread.start()
-            drain(page, runtime)
+            drain(session)
             for thread in threads:
                 thread.join()
             for work in pending:
                 merge(work)
 
-        with browser.session(cfg, engine) as (page, runtime):
+        with browser.session(cfg, engine) as opened:
+            page, runtime = opened
             if len(cfg.browsers) > 1:
                 log(f"{label}:")
             errors.extend(states.run_setup(page, cfg) if leading else
@@ -311,6 +314,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     if leading:
                         consent = engine_consent
                     if engine_consent:
+                        opened.reset_mobile()  # the phone page starts again from the storage without the banner
                         runtime.clear()
                         response = states.open_page(page, cfg, path, 1280, 900)
                 landed = _landed(page.url, cfg.base_url)
@@ -349,9 +353,10 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     work.runtime("failed-resource", path, "default", message, 1280, engine=engine)
                 pending.append(work)
 
-            def run_route(page, runtime, work: _RouteWork, say: Callable[[str], None]) -> None:
+            def run_route(session: browser.Session, work: _RouteWork, say: Callable[[str], None]) -> None:
                 """Find the states of a route the lead browser kept (or take the lead's) and sweep
                 each one. Everything it finds goes into `work`, merged into the report later."""
+                page, runtime = session
                 path, breakpoints, baseline_errors = work.route.path, work.breakpoints, work.baseline_errors
                 initial_anomalies: set[int] = set()
                 if leading:
@@ -393,20 +398,33 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                         continue
 
                     runtime.clear()
-                    first, loaded = states.first_width(page, cfg, state, probe_widths)
+                    scout = session.page_for(probe_widths[0])
+                    first, loaded = states.first_width(scout, cfg, state, probe_widths)
                     if first is None:
                         finish(record, "skipped: its control is not shown at any width")
                         continue
                     if not loaded:
                         runtime.clear()
-                    if not states.apply(page, cfg, state, first, viewports.height_for(first), loaded):
+                    # Narrow widths are measured on a phone page, the others on the desktop page. The
+                    # state is replayed on each page the first time a width needs it.
+                    applied: dict[int, bool] = {}
+
+                    def page_at(width: int, _state=state, _applied=applied, _ready=scout if loaded else None):
+                        target = session.page_for(width)
+                        if id(target) not in _applied:
+                            _applied[id(target)] = states.apply(target, cfg, _state, width, viewports.height_for(width),
+                                                                target is _ready)
+                        return target if _applied[id(target)] else None
+
+                    first_page = page_at(first)
+                    if first_page is None:
                         finish(record, "skipped: could not be applied")
                         continue
                     if state.kind != "default":
-                        note_sources(page, work.sources)  # an opened dialog or menu brings its own components
+                        note_sources(first_page, work.sources)  # an opened dialog or menu brings its own components
                         new_errors = [m for m in runtime.console_errors if m not in baseline_errors]
                         # The error came with opening this state, so the component that opened is where to look.
-                        layer = (page.evaluate("t => window.__uiAudit.layerInfo(t)", state.trigger)
+                        layer = (first_page.evaluate("t => window.__uiAudit.layerInfo(t)", state.trigger)
                                  if new_errors else None)
                         for message in new_errors:
                             work.runtime("console-error", path, state.id, message, first, hints=layer, engine=engine)
@@ -417,13 +435,18 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     results: dict[int, dict] = {}
                     not_applicable: set[int] = set()
 
-                    def probe(width: int, _state=state, _results=results, _na=not_applicable) -> frozenset[str]:
-                        browser.resize(page, width, viewports.height_for(width), min(cfg.settle_ms, SWEEP_SETTLE_MS))
-                        work.probes += 1
-                        if _state.trigger and not page.evaluate("s => window.__uiAudit.isTriggerVisible(s)", _state.trigger):
+                    def probe(width: int, _state=state, _results=results, _na=not_applicable,
+                              _page_at=page_at) -> frozenset[str]:
+                        target = _page_at(width)
+                        if target is None:
                             _na.add(width)
                             return NOT_APPLICABLE
-                        result = page.evaluate("o => window.__uiAudit.probe(o)", opts)
+                        browser.resize(target, width, viewports.height_for(width), min(cfg.settle_ms, SWEEP_SETTLE_MS))
+                        work.probes += 1
+                        if _state.trigger and not target.evaluate("s => window.__uiAudit.isTriggerVisible(s)", _state.trigger):
+                            _na.add(width)
+                            return NOT_APPLICABLE
+                        result = target.evaluate("o => window.__uiAudit.probe(o)", opts)
                         _results[width] = result
                         for raw in result["issues"]:
                             work.observe(raw, path, _state.id, width, engine)
@@ -455,10 +478,15 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                             standard, bp_widths, anomalies, {w for w, r in results.items() if r["issues"]},
                             vc.max_captures, lo, hi)
                     plans = [p for p in plans if p.width not in not_applicable]
+                    if state.kind == "default":
+                        _check_viewport_meta(first_page, work, path, engine, plans, results, vc.mobile_below or MOBILE_WIDTH)
 
                     for plan in plans:
                         try:
-                            work.captures.append(_capture(page, cfg, shots_dir, out_dir, path, state, plan, results, probe, engine))
+                            target = page_at(plan.width)
+                            if target is None:
+                                continue
+                            work.captures.append(_capture(target, cfg, shots_dir, out_dir, path, state, plan, results, probe, engine))
                         except Exception as exc:  # noqa: BLE001 - keep the other screenshots
                             work.errors.append(f"{where(path)} [{state.id}] {plan.width}px: screenshot failed ({str(exc)[:120]})")
                     if leading:
@@ -467,7 +495,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     finish(record, "audited")
                     say(f"  {state.id}: {len(results)} widths probed, {len(plans)} captured")
 
-            measure(page, runtime, pending, run_route)
+            measure(opened, pending, run_route)
 
     # Only browsers that finished count as audited: a finding is "only in" some browsers only
     # where the others were really measured.
@@ -536,6 +564,21 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
     report_mod.write_html(result, out_dir)
     semantic.build_packet(result, out_dir)
     return result
+
+
+def _check_viewport_meta(page, issue_set: IssueSet | _RouteWork, path: str, engine: str, plans: list, results: dict,
+                         narrow_below: int) -> None:
+    """Report a missing or zoom-blocking meta viewport once per route, at the narrowest width
+    captured (or probed) below `narrow_below`, so it comes with a phone screenshot."""
+    narrow = sorted(p.width for p in plans if p.width < narrow_below) or sorted(w for w in results if w < narrow_below)
+    if not narrow:
+        return
+    try:
+        raw = page.evaluate("() => window.__uiAudit.viewportMeta()")
+    except Exception:  # noqa: BLE001 - a page that navigated away is measured by its sweep only
+        return
+    if raw:
+        issue_set.observe(raw, path, "default", narrow[0], engine)
 
 
 def _capture(page, cfg: Config, shots_dir: Path, out_dir: Path, path: str, state, plan, results: dict, probe,
