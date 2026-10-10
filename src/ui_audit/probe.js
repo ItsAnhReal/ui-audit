@@ -647,8 +647,10 @@
     return { check, severity, el, message };
   }
 
-  function finishIssue({ check, severity, el, message }) {
-    return { check, severity, selector: cssPath(el), message, rect: rectOf(el), hints: sourceInfo(el) };
+  function finishIssue({ check, severity, el, message, cause }) {
+    const issue = { check, severity, selector: cssPath(el), message, rect: rectOf(el), hints: sourceInfo(el) };
+    if (cause) issue.cause = cause;
+    return issue;
   }
 
   function probe(opts) {
