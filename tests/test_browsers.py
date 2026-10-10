@@ -137,6 +137,8 @@ def test_verify_looks_at_the_widths_each_browser_showed_the_issue_at():
     assert [i["selector"] for i in compare(baseline, matching)["fixed"]] == [".x"]
 
 
+@pytest.mark.e2e
+@pytest.mark.usefixtures("chromium_available")
 def test_a_browser_that_did_not_start_is_not_counted_as_audited(demo_site, tmp_path, monkeypatch):
     from ui_audit import browser
 
@@ -149,11 +151,8 @@ def test_a_browser_that_did_not_start_is_not_counted_as_audited(demo_site, tmp_p
 
     monkeypatch.setattr(browser, "launch", launch)
     url, site = demo_site
-    try:
-        report = audit.run(_config(url, site, tmp_path / "run", ["chromium", "firefox"], ["/pricing.html"]),
-                           log=lambda _: None)
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip(f"Chromium unavailable: {exc}")
+    report = audit.run(_config(url, site, tmp_path / "run", ["chromium", "firefox"], ["/pricing.html"]),
+                       log=lambda _: None)
     assert report["browsers"] == ["chromium"]
     assert any(e.startswith("Firefox:") for e in report["errors"])
     assert report["issues"] and all(i["browsers"] == ["chromium"] for i in report["issues"])

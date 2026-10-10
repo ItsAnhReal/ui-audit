@@ -78,4 +78,6 @@ List each fixed cause with route, widths, root cause, the file you changed, and 
 ## Useful flags
 
 - `--route` (repeatable), `--width 390,768` for targeted runs; `--no-states` skips state discovery; `--max-captures N` bounds screenshots
+- `--fail-on P1` for CI-style exit codes
+- Exit codes: 0 ok, 1 findings over the threshold (`--fail-on`, `verify`), 2 usage or input error, 3 the app or the audit failed (a route did not load, or most routes ended on a sign-in page): never read 3 as "no findings"
 - `ui-audit verify --pixel-diff` adds per-screenshot changed-pixel ratios (needs Pillow)

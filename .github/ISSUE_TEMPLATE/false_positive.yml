@@ -1,0 +1,42 @@
+name: False positive
+description: ui-audit reported something that is not a defect.
+labels: ["false positive"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! The most useful report comes with the smallest page that still shows the finding: one HTML file with inline CSS, no framework, no build step. A fix starts by adding that page to `tests/cases/`, so the false positive never comes back.
+  - type: input
+    id: finding
+    attributes:
+      label: Finding
+      description: The check, severity and widths from the report, e.g. "overlapping-controls, P2, 768–1023 px".
+    validations:
+      required: true
+  - type: textarea
+    id: page
+    attributes:
+      label: Smallest page reproducing it
+      description: Paste the HTML (or link a gist). Cut everything that does not change the result.
+      render: html
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it is not a defect
+      description: What a person sees at that width, and what ui-audit measured instead. A screenshot helps.
+    validations:
+      required: true
+  - type: input
+    id: command
+    attributes:
+      label: Command
+      description: e.g. `ui-audit audit http://localhost:8000 --width 800`
+  - type: input
+    id: version
+    attributes:
+      label: Version and browser
+      description: Output of `ui-audit --version`, and the browser (chromium, webkit or firefox).
+    validations:
+      required: true
