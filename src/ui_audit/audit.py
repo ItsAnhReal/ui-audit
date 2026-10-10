@@ -6,6 +6,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlparse
 
 from . import __version__, browser, report as report_mod, routes, semantic, states, viewports
 from .config import STANDARD_VIEWPORTS, Config
@@ -37,6 +38,17 @@ def _not_a_page(response) -> str | None:
         return None
     kind = (response.headers.get("content-type") or "").split(";")[0].strip().lower()
     return None if not kind or kind in {"text/html", "application/xhtml+xml"} else kind
+
+
+def _landed(url: str, base_url: str) -> str:
+    """Where a route ended up: its path, or the whole URL when it left the app's origin."""
+    here, there = urlparse(url), urlparse(base_url)
+    path, prefix = routes.normalize(url), routes.normalize(base_url)
+    if (here.scheme, here.netloc) != (there.scheme, there.netloc):
+        return f"{here.scheme}://{here.netloc}{path}"
+    if prefix != "/" and (path == prefix or path.startswith(prefix + "/")):
+        path = path[len(prefix):] or "/"  # routes are relative to a base URL with a path
+    return path
 
 
 def _skip_reason(page, response, path: str, missing: str | None, seen_pages: dict[str, str],
@@ -175,7 +187,9 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                 except Exception as exc:  # noqa: BLE001 - keep auditing the other routes
                     errors.append(f"{where(path)}: could not load ({exc.__class__.__name__}: {str(exc)[:120]})")
                     if leading:
-                        route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": False})
+                        reason = f"{exc.__class__.__name__}: {(str(exc).splitlines() or [''])[0][:160]}"
+                        route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": False,
+                                              "error": reason})
                     event("route", path=path, status="failed", detail=exc.__class__.__name__)
                     continue
                 if cfg.states.dismiss_consent and engine_consent is None:
@@ -186,11 +200,13 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     if engine_consent:
                         runtime.clear()
                         response = states.open_page(page, cfg, path, 1280, 900)
+                landed = _landed(page.url, cfg.base_url)
+                moved = {"landed": landed} if landed != path else {}  # a redirect, e.g. to a sign-in page
                 kind = _not_a_page(response)
                 if kind:
                     if leading:
                         route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": True,
-                                              "status": f"skipped: not a web page ({kind})"})
+                                              "status": f"skipped: not a web page ({kind})", **moved})
                     log(f"{where(path)}: skipped (not a web page: {kind})")
                     event("route", path=path, status="skipped", detail=f"not a web page ({kind})")
                     continue
@@ -199,13 +215,13 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                         if dedupe else None)
                 if skip:
                     route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": True,
-                                          "status": f"skipped: {skip}"})
+                                          "status": f"skipped: {skip}", **moved})
                     log(f"{path}: skipped ({skip})")
                     event("route", path=path, status="skipped", detail=skip)
                     continue
                 if leading:
                     route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": True,
-                                          "status": "audited", "content": content})
+                                          "status": "audited", "content": content, **moved})
                 note_sources(page, path)
                 if content["state"] != "ok":
                     log(f"{where(path)}: may not show its real content ({content['state']}: {content['detail']})")

@@ -162,7 +162,7 @@ def test_run_reports_an_app_that_never_answers(tmp_path, monkeypatch):
     from ui_audit.cli import main
 
     code = main(["ci", f"http://127.0.0.1:{free_port()}/", "--compare", "none", "--output", str(tmp_path / "out")])
-    assert code == 2
+    assert code == 3
     assert "could not audit" in (tmp_path / "out" / "summary.md").read_text()
 
 
@@ -190,7 +190,7 @@ def test_a_base_that_cannot_be_audited_fails_the_run_and_the_token_stays_out_of_
 
     out = tmp_path / "out"
     assert main(["ci", "http://127.0.0.1:1/", "--start", "x", "--base-ref", "HEAD", "--working-directory", str(repo),
-                 "--output", str(out)]) == 2
+                 "--output", str(out)]) == 3
     assert seen == [(False, False), (False, False)]
     assert "The base commit could not be audited" in (out / "summary.md").read_text()
     assert main(["ci", "http://127.0.0.1:1/", "--start", "x", "--base-ref", "HEAD", "--working-directory", str(repo),

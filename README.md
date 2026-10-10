@@ -68,6 +68,19 @@ To re-check with the settings an earlier run used (app address, sign-in, languag
 
 `verify` reports **fixed**, **introduced** and **persistent** issues. A baseline issue only counts as fixed if the new run probed its route, state and at least one of its widths; everything else is counted as out of scope. Agent findings only count as fixed after a new semantic review. Exit code 1 means a P1/P2 issue was introduced (`--strict` also fails on persistent ones).
 
+### Exit codes
+
+Every command uses the same codes, so a script or an agent can tell a finding from a broken run:
+
+| Code | Meaning |
+|---|---|
+| 0 | done, nothing over the threshold |
+| 1 | findings over the threshold: `audit --fail-on`, `verify` (introduced, or persistent with `--strict`), `ci --fail-on` |
+| 2 | usage error: a bad option or `ui-audit.toml`, a missing or unreadable `report.json` or findings file, invalid agent findings, `init` over an existing file |
+| 3 | the app or the audit failed: a route did not load, no route was measured, most routes ended on one other page (an expired sign-in, usually), the audit crashed, or `doctor` found a problem |
+
+On 3, `report.json` is still written, but 0 findings in it do not mean the app is fine.
+
 ### Agent skill
 
 ```bash
@@ -195,7 +208,7 @@ The action is a thin wrapper around `ui-audit ci`, which works the same way in a
 ui-audit ci http://localhost:3000 --install "npm ci" --start "npm run dev -- --port 3000" --base-ref origin/main --args "--fast"
 ```
 
-It exits 1 when `--fail-on` is met and 2 when the app or the audit could not run, and writes both reports and `summary.md` to `.ui-audit/ci`.
+It exits 1 when `--fail-on` is met and 3 when the app or the audit could not run, and writes both reports and `summary.md` to `.ui-audit/ci`.
 
 ## Pages behind a login
 
@@ -204,7 +217,7 @@ ui-audit login --path /auth          # opens a browser window; sign in, then pre
 ui-audit audit --storage-state .ui-audit/auth.json
 ```
 
-`login` saves the browser's cookies and local storage to `.ui-audit/auth.json` (or `--save <file>`); set `storage_state` in `ui-audit.toml` to use it on every run. You type the password yourself, in the browser; `ui-audit` never sees or stores it. The saved file works like a password for that account, so keep `.ui-audit/` out of version control, and sign in again when the session expires.
+`login` saves the browser's cookies and local storage to `.ui-audit/auth.json` (or `--save <file>`); set `storage_state` in `ui-audit.toml` to use it on every run. You type the password yourself, in the browser; `ui-audit` never sees or stores it. The saved file works like a password for that account, so keep `.ui-audit/` out of version control, and sign in again when the session expires. When most routes (at least three, and 80% of those that loaded) end on the same other page, `audit` names that page and exits 3 instead of reporting the sign-in page as everything.
 
 ## Pages that measure clean for the wrong reason
 

@@ -152,8 +152,10 @@ def audit_checkout(*, cwd: Path, url: str, output: Path, audit_args: list[str], 
         elif not _answers(url):
             raise CIError(f"nothing answers at {url}; start the app first or pass --start")
         code = _audit(url, cwd, output, audit_args, extra)
-        if code not in (0, 2):  # 2 is --fail-on in the audit args; the summary decides here
-            raise CIError(f"ui-audit audit exited with code {code} for the {label} checkout")
+        if code not in (0, 1):  # 1 is --fail-on in the audit args; the summary decides here
+            why = {2: "rejected its arguments or config", 3: "could not audit the app"}.get(code,
+                                                                                            f"exited with code {code}")
+            raise CIError(f"ui-audit audit {why} for the {label} checkout (see its log above)")
     finally:
         if app:
             app.stop(url)
@@ -467,7 +469,7 @@ def run(args) -> int:
         "blocking": str(blocking).lower(),
     })
     if failed:
-        return 2
+        return 3  # the same codes as every command: 1 findings, 3 the app or the audit failed
     return 1 if blocking else 0
 
 
