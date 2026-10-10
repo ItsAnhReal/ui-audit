@@ -7,6 +7,7 @@ import json
 import shutil
 import sys
 import urllib.request
+from collections import Counter
 from importlib import resources
 from pathlib import Path
 
@@ -14,12 +15,32 @@ from . import __version__
 from .config import CONFIG_FILENAME, ConfigError, from_dict, load, parse_browsers, render_template
 from .sources import SOURCE_EXTS
 
+# Exit codes, the same for every command (README "Exit codes").
+OK, FINDINGS, USAGE, FAILED = 0, 1, 2, 3
+
 SKILL_TARGETS = {
     ("project", "claude"): Path(".claude/skills/ui-audit"),
     ("project", "codex"): Path(".codex/skills/ui-audit"),
     ("user", "claude"): Path("~/.claude/skills/ui-audit"),
     ("user", "codex"): Path("~/.codex/skills/ui-audit"),
 }
+
+
+class InputError(Exception):
+    """A file the command was pointed at is missing or unreadable: a usage error, not a finding."""
+
+
+def _read_input(path: Path, report: bool = True):
+    """report.json in a run folder (or a JSON file when report=False), with a one-line error if it cannot be read."""
+    target = path / "report.json" if report and (path.is_dir() or path.suffix != ".json") else path
+    try:
+        return json.loads(target.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise InputError(f"no report.json in {path}" if target != path else f"{path} not found") from None
+    except json.JSONDecodeError as exc:
+        raise InputError(f"{target} is not valid JSON ({exc.msg}, line {exc.lineno})") from None
+    except OSError as exc:
+        raise InputError(f"cannot read {target}: {exc.strerror or exc}") from None
 
 
 def _widths(text: str) -> list[int]:
@@ -73,8 +94,8 @@ def cmd_init(args) -> int:
 
     target = Path(args.project_root or ".") / CONFIG_FILENAME
     if target.exists() and not args.force:
-        print(f"{target} already exists (use --force to overwrite)")
-        return 1
+        print(f"{target} already exists (use --force to overwrite)", file=sys.stderr)
+        return USAGE
     found, dynamic = routes_from_source(Path(args.project_root or "."), {})
     include = found[:15] or ["/"]
     target.write_text(render_template(args.base_url or "http://localhost:3000", include), encoding="utf-8")
@@ -104,7 +125,7 @@ def cmd_doctor(args) -> int:
         report(True, "config", str(path) if path else "none found, using defaults")
     except (ConfigError, OSError, ValueError) as exc:
         report(False, "config", str(exc))
-        return 1
+        return USAGE
     try:
         from playwright.sync_api import sync_playwright
 
@@ -126,10 +147,35 @@ def cmd_doctor(args) -> int:
             report(response.status < 500, "app reachable", f"{cfg.base_url} ({response.status})")
     except Exception as exc:  # noqa: BLE001 - surface any network error
         report(False, "app reachable", f"{cfg.base_url} ({exc.__class__.__name__}); start the dev server first")
-    for (scope, agent), target in SKILL_TARGETS.items():
-        installed = (target.expanduser() / "SKILL.md").exists()
-        print(f"  {'ok  ' if installed else '-   '}  skill for {agent} ({scope}) {'installed' if installed else 'not installed'}")
-    return 0 if ok else 1
+    for line in skill_status(Path(args.project_root or ".")):
+        print(f"  {line}")
+    return OK if ok else FAILED
+
+
+def skill_status(project_root: Path, home: Path | None = None) -> list[str]:
+    """One line per agent: which installed copy of the skill it reads, and whether that copy is current."""
+    shipped = resources.files("ui_audit").joinpath("skill/SKILL.md").read_text(encoding="utf-8")
+    lines = []
+    for agent, name in (("claude", "Claude Code"), ("codex", "Codex")):
+        found = []
+        for scope in ("project", "user"):
+            target = SKILL_TARGETS[(scope, agent)]
+            path = project_root / target if scope == "project" else (home or Path.home()) / target.relative_to("~")
+            if (path / "SKILL.md").is_file():
+                found.append((scope, path / "SKILL.md"))
+        if not found:
+            lines.append(f"-     skill for {name}: not installed; only needed if you use {name} "
+                         f"(`ui-audit install-skill --agent {agent}` puts it in this project)")
+            continue
+        old = [scope for scope, path in found if path.read_text(encoding="utf-8") != shipped]
+        where = " and ".join(f"{scope} ({path})" for scope, path in found)
+        note = ("; the project copy travels with the repository, the user copy is only on this machine"
+                if len(found) > 1 else "")
+        if old:
+            note = f"; the {' and '.join(old)} copy is from another version, rerun " + " and ".join(
+                f"`ui-audit install-skill --agent {agent} --scope {scope}`" for scope in old)
+        lines.append(f"{'ok  ' if not old else 'old '}  skill for {name}: {where}{note}")
+    return lines
 
 
 def _open_viewer(path: Path) -> None:
@@ -141,11 +187,12 @@ def _open_viewer(path: Path) -> None:
 def cmd_accept(args) -> int:
     from . import report as report_mod
 
+    _read_input(Path(args.report_dir))  # a wrong folder is a one-line error, not a traceback
     try:
         added, already, path = report_mod.accept(Path(args.report_dir), args.ids, args.reason)
     except LookupError as exc:
         print(exc, file=sys.stderr)
-        return 2
+        return USAGE
     print(f"accepted {added} finding(s) in {path}" + (f" ({already} were already accepted)" if already else ""))
     return 0
 
@@ -179,7 +226,7 @@ def cmd_report(args) -> int:
     if not (out_dir / report_mod.REPORT_JSON).is_file():
         print(f"no report.json in {out_dir}; run `ui-audit audit --output {out_dir}` first", file=sys.stderr)
         return 2
-    path = report_mod.write_html(report_mod.read_json(out_dir), out_dir)
+    path = report_mod.write_html(_read_input(out_dir), out_dir)
     print(f"report viewer: {path}")
     if not args.no_open:
         _open_viewer(path)
@@ -314,13 +361,18 @@ def cmd_audit(args) -> int:
         except Exception as exc:  # noqa: BLE001 - not a git checkout, unknown ref, git missing
             print(f"could not list changes since {args.changed_since}: {str(exc).splitlines()[0]}", file=sys.stderr)
             return 2
-        only_routes, why = routes_for_changes(report_mod.read_json(baseline_dir), changed)
+        only_routes, why = routes_for_changes(_read_input(baseline_dir), changed)
         print(f"changed since {args.changed_since}: {why}")
         if not only_routes:
             return 0
         if Path(cfg.output).resolve() == baseline_dir.resolve():
             cfg.output = str(baseline_dir.with_name(baseline_dir.name + "-changed"))  # keep the full report
-    result = run(cfg, only_routes=only_routes, log=log)
+    try:
+        result = run(cfg, only_routes=only_routes, log=log)
+    except Exception as exc:  # noqa: BLE001 - one honest line instead of a traceback an agent reads as findings
+        print(f"error: the audit failed ({exc.__class__.__name__}: {str(exc).splitlines()[0] if str(exc) else ''})",
+              file=sys.stderr)
+        return FAILED
 
     counts = result["stats"]["issues"]
     out = Path(cfg.output)
@@ -341,21 +393,62 @@ def cmd_audit(args) -> int:
         if content.get("state", "ok") != "ok":
             print(f"check by hand: {route['path']} may not show its real content "
                   f"({content['state']}: {content['detail']}), so a clean result there means little")
-    skipped = len(result["routes"]) - len(audited)
+    failed = [r for r in result["routes"] if not r.get("loaded", True)]
+    skipped = len(result["routes"]) - len(audited) - len(failed)
     if skipped:
-        print(f"{skipped} route(s) skipped as not found or duplicate; see routes[].status in report.json")
+        print(f"{skipped} route(s) skipped as not found, duplicate or not a web page; "
+              "see routes[].status in report.json")
     print(f"report: {out / 'report.json'}")
     print(f"report viewer: {out / 'index.html'}")
     print(f"semantic review packet: {out / 'semantic-review.md'}")
     for error in result["errors"]:
-        print(f"warning: {error}", file=sys.stderr)
+        print(f"warning: {error.splitlines()[0]}", file=sys.stderr)
     if args.open:
         _open_viewer(out / report_mod.REPORT_HTML)
+    if not audit_trustworthy(result, cfg.base_url):
+        return FAILED
     if args.fail_on:
         threshold = {"P1": ["P1"], "P2": ["P1", "P2"], "P3": ["P1", "P2", "P3"]}[args.fail_on]
         if any(counts[level] for level in threshold):
-            return 2
-    return 0
+            return FINDINGS
+    return OK
+
+
+def sign_in_wall(report: dict) -> tuple[str, int, int] | None:
+    """The URL most routes were sent to instead of their own page (an expired sign-in, usually):
+    (landed, how many, of how many loaded), or None. A handful of routes is too few to tell."""
+    loaded = [r for r in report["routes"] if r.get("loaded", True)]
+    moved = Counter(r["landed"] for r in loaded if r.get("landed"))
+    if not moved:
+        return None
+    landed, count = moved.most_common(1)[0]
+    return (landed, count, len(loaded)) if count >= 3 and count >= 0.8 * len(loaded) else None
+
+
+def audit_trustworthy(report: dict, base_url: str) -> bool:
+    """Print why a finished audit says little about the app (exit 3), or return True if it measured what it should."""
+    from . import report as report_mod
+    from .browser import url_for
+
+    audited = report_mod.audited_routes(report)
+    failed = [r for r in report["routes"] if not r.get("loaded", True)]
+    for route in failed:
+        print(f"error: {url_for(base_url, route['path'])} did not load ({route.get('error') or 'see errors[]'})",
+              file=sys.stderr)
+    if failed and len(failed) == len(report["routes"]):
+        print(f"error: nothing loaded; is the app running at {base_url}?", file=sys.stderr)
+    wall = sign_in_wall(report)
+    if wall:
+        landed, count, total = wall
+        where = landed if "://" in landed else url_for(base_url, landed)
+        print(f"error: {count} of {total} routes ended on {where} instead of their own page; that looks like a "
+              "sign-in page: is storage_state expired? (`ui-audit login` saves a new session)", file=sys.stderr)
+    if not audited and not failed:
+        print("error: no route was measured; see routes[].status in report.json", file=sys.stderr)
+    if failed or wall or not audited:
+        print("the audit is incomplete, so 0 findings would not mean the app is fine", file=sys.stderr)
+        return False
+    return True
 
 
 def cmd_merge(args) -> int:
@@ -364,8 +457,8 @@ def cmd_merge(args) -> int:
 
     out_dir = Path(args.report_dir)
     findings_path = Path(args.findings) if args.findings else out_dir / "agent-findings.json"
-    report = report_mod.read_json(out_dir)
-    findings = json.loads(findings_path.read_text(encoding="utf-8"))
+    report = _read_input(out_dir)
+    findings = _read_input(findings_path, report=False)
     if isinstance(findings, dict):
         findings = findings.get("findings", [])
     added, errors = merge(report, findings)
@@ -375,7 +468,7 @@ def cmd_merge(args) -> int:
     print(f"merged {added} agent finding(s) into {out_dir / 'report.json'}")
     for error in errors:
         print(f"rejected {error}", file=sys.stderr)
-    return 1 if errors else 0
+    return USAGE if errors else OK  # rejected entries are invalid input: fix them and merge again
 
 
 def cmd_verify(args) -> int:
@@ -383,7 +476,7 @@ def cmd_verify(args) -> int:
     from . import verify
 
     base_dir, current_dir = Path(args.baseline), Path(args.current)
-    baseline, current = report_mod.read_json(base_dir), report_mod.read_json(current_dir)
+    baseline, current = _read_input(base_dir), _read_input(current_dir)
     result = verify.compare(baseline, current)
     out_dir = Path(args.output) if args.output else current_dir
     if args.pixel_diff:
@@ -394,7 +487,7 @@ def cmd_verify(args) -> int:
     blocking = [i for i in result["introduced"] if i["severity"] in ("P1", "P2")]
     if args.strict:
         blocking += [i for i in result["persistent"] if i["severity"] in ("P1", "P2")]
-    return 1 if blocking else 0
+    return FINDINGS if blocking else OK
 
 
 def cmd_install_skill(args) -> int:
@@ -411,8 +504,19 @@ def cmd_install_skill(args) -> int:
     return 0
 
 
+EPILOG = """the loop:
+  1. ui-audit init                            write ui-audit.toml with the routes found in the source
+  2. ui-audit audit --output .ui-audit/a      find layout bugs: report.json, index.html
+  3. fix the code, then audit again into .ui-audit/b
+  4. ui-audit verify .ui-audit/a .ui-audit/b  what is fixed, introduced or persistent
+
+exit codes: 0 ok, 1 findings over the threshold (audit --fail-on, verify),
+2 usage, config or input file error, 3 the app or the audit failed"""
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="ui-audit", description="Responsive UI Auditor")
+    parser = argparse.ArgumentParser(prog="ui-audit", description="Responsive UI Auditor", epilog=EPILOG,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--version", action="version", version=f"ui-audit {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -445,7 +549,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-captures", type=int, help="screenshot cap per route/state")
     p.add_argument("--no-states", action="store_true", help="skip automatic state discovery")
     p.add_argument("--no-annotate", action="store_true", help="skip annotated screenshots")
-    p.add_argument("--fail-on", choices=["P1", "P2", "P3"], help="exit 2 if issues at or above this severity")
+    p.add_argument("--fail-on", choices=["P1", "P2", "P3"], help="exit 1 if issues at or above this severity")
     p.add_argument("--quiet", action="store_true")
     p.add_argument("--open", action="store_true", help="open the report viewer in the browser when done")
     p.add_argument("--storage-state", help="signed-in session saved by `ui-audit login`")
@@ -522,4 +626,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if getattr(args, "base_url_pos", None) and not args.base_url:
         args.base_url = args.base_url_pos
-    return args.func(args)
+    try:
+        return args.func(args)
+    except InputError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return USAGE
