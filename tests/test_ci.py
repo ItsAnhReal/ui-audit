@@ -117,15 +117,42 @@ def free_port():
 def test_app_is_started_waited_for_and_stopped(tmp_path):
     port = free_port()
     url = f"http://127.0.0.1:{port}/"
-    app = ci.App(f"{sys.executable} -m http.server {port} --bind 127.0.0.1", tmp_path, tmp_path / "app.log")
+    # A bare TCPServer: `python -m http.server` resolves the host name first, which can stall on macOS runners.
+    (tmp_path / "serve.py").write_text(
+        "import http.server, socketserver, sys\n"
+        "socketserver.TCPServer(('127.0.0.1', int(sys.argv[1])), http.server.SimpleHTTPRequestHandler).serve_forever()\n")
+    app = ci.App(f'"{sys.executable}" -u serve.py {port}', tmp_path, tmp_path / "app.log")
     app.start(url, timeout=20)
     assert ci._answers(url)
     app.stop(url)
     assert not ci._answers(url)
 
 
+def test_a_local_app_is_asked_directly_not_through_a_proxy(tmp_path, monkeypatch):
+    import functools
+    import http.server
+    import threading
+
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(tmp_path))
+    handler.log_message = lambda *a: None  # type: ignore[assignment]
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        # A proxy that is not there, and nothing exempting loopback (macOS system proxies behave alike).
+        for name in ("no_proxy", "NO_PROXY"):
+            monkeypatch.delenv(name, raising=False)
+        for name in ("http_proxy", "HTTP_PROXY"):
+            monkeypatch.setenv(name, f"http://127.0.0.1:{free_port()}")
+        for host in ("127.0.0.1", "localhost"):
+            assert ci._answers(f"http://{host}:{server.server_address[1]}/")
+        assert ci._loopback("::1") and ci._loopback("app.localhost") and not ci._loopback("example.com")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_a_start_command_that_dies_is_reported_with_its_output(tmp_path):
-    app = ci.App("echo boom; exit 3", tmp_path, tmp_path / "app.log")
+    app = ci.App("echo boom&& exit 3", tmp_path, tmp_path / "app.log")  # sh and cmd.exe alike
     with pytest.raises(ci.CIError, match="exited with code 3") as caught:
         app.start(f"http://127.0.0.1:{free_port()}/", timeout=10)
     assert "boom" in str(caught.value)
@@ -136,7 +163,7 @@ def test_run_reports_an_app_that_never_answers(tmp_path, monkeypatch):
     from ui_audit.cli import main
 
     code = main(["ci", f"http://127.0.0.1:{free_port()}/", "--compare", "none", "--output", str(tmp_path / "out")])
-    assert code == 2
+    assert code == 3
     assert "could not audit" in (tmp_path / "out" / "summary.md").read_text()
 
 
@@ -165,7 +192,8 @@ def test_a_base_that_cannot_be_audited_fails_the_run_and_the_audit_posts_nothing
 
     out = tmp_path / "out"
     assert main(["ci", "http://127.0.0.1:1/", "--start", "x", "--base-ref", "HEAD", "--working-directory", str(repo),
-                 "--output", str(out)]) == 2
+                 "--output", str(out)]) == 3
+    assert seen == [(False, False), (False, False)]
     assert "The base commit could not be audited" in (out / "summary.md").read_text()
     assert json.loads((out / "pull-request.json").read_text()) == {"number": 5}  # for a later --post-comment
     assert main(["ci", "http://127.0.0.1:1/", "--start", "x", "--base-ref", "HEAD", "--working-directory", str(repo),

@@ -19,9 +19,11 @@ import subprocess
 import sys
 import tempfile
 import time
+import ipaddress
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 
 from . import report as report_mod
 from . import verify
@@ -44,9 +46,24 @@ def _child_env() -> dict:
     return {k: v for k, v in os.environ.items() if k not in TOKEN_VARS}
 
 
-def _answers(url: str) -> bool:
+def _loopback(host: str) -> bool:
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
     try:
-        with urllib.request.urlopen(url, timeout=3) as response:  # noqa: S310 - the app under test
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+# urllib honours proxy environment variables and, on macOS, the system proxy settings, neither of
+# which exempts 127.0.0.1 by default; an app on this machine is asked directly.
+_DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def _answers(url: str) -> bool:
+    opener = _DIRECT if _loopback(urlparse(url).hostname or "") else urllib.request.build_opener()
+    try:
+        with opener.open(url, timeout=3) as response:  # noqa: S310 - the app under test
             return response.status < 500
     except urllib.error.HTTPError as exc:
         return exc.code < 500
@@ -67,8 +84,10 @@ class App:
                           "stop it or let ui-audit start the app")
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         log = self.log_path.open("w", encoding="utf-8")
+        group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"  # type: ignore[attr-defined]
+                 else {"start_new_session": True})
         self.process = subprocess.Popen(self.command, shell=True, cwd=self.cwd, stdout=log, stderr=subprocess.STDOUT,
-                                        start_new_session=True, env=_child_env())
+                                        **group, env=_child_env())
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if _answers(url):
@@ -81,7 +100,14 @@ class App:
         raise CIError(f"{url} did not answer within {timeout:.0f}s of starting the app\n{self.tail()}")
 
     def stop(self, url: str | None = None) -> None:
-        if self.process and self.process.poll() is None:
+        if self.process and self.process.poll() is None and os.name == "nt":
+            # cmd.exe passes nothing on to the app it started; end the whole process tree.
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(self.process.pid)], capture_output=True)
+            try:
+                self.process.wait(10)
+            except subprocess.TimeoutExpired:
+                pass
+        elif self.process and self.process.poll() is None:
             for sig, wait in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
                 try:
                     os.killpg(self.process.pid, sig)
@@ -136,8 +162,10 @@ def audit_checkout(*, cwd: Path, url: str, output: Path, audit_args: list[str], 
         elif not _answers(url):
             raise CIError(f"nothing answers at {url}; start the app first or pass --start")
         code = _audit(url, cwd, output, audit_args, extra)
-        if code not in (0, 2):  # 2 is --fail-on in the audit args; the summary decides here
-            raise CIError(f"ui-audit audit exited with code {code} for the {label} checkout")
+        if code not in (0, 1):  # 1 is --fail-on in the audit args; the summary decides here
+            why = {2: "rejected its arguments or config", 3: "could not audit the app"}.get(code,
+                                                                                            f"exited with code {code}")
+            raise CIError(f"ui-audit audit {why} for the {label} checkout (see its log above)")
     finally:
         if app:
             app.stop(url)
@@ -523,7 +551,7 @@ def run(args) -> int:
         "blocking": str(blocking).lower(),
     })
     if failed:
-        return 2
+        return 3  # the same codes as every command: 1 findings, 3 the app or the audit failed
     return 1 if blocking else 0
 
 

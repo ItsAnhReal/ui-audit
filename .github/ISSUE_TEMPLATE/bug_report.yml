@@ -1,0 +1,35 @@
+name: Bug report
+description: ui-audit crashed, missed a defect, or did something unexpected.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: For a finding that is not a defect, use the "False positive" template instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: And what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The command, the relevant part of ui-audit.toml, and a page or public URL that shows it if you can.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: Terminal output or the traceback. Leave out anything private.
+      render: text
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Output of `ui-audit doctor` (version, Python, browsers) and your OS.
+      render: text
+    validations:
+      required: true
