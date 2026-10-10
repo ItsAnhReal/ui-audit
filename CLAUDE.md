@@ -12,6 +12,8 @@ Guidance for Claude Code (and Codex via AGENTS.md) working on this repository.
 pip install -e ".[dev]"      # Python ≥3.11
 pytest                       # all tests; e2e tests launch Chromium against the demo site (~1 min)
 pytest -m "not e2e"          # fast unit tests
+pytest -n auto               # in parallel (pytest-xdist); CI runs this
+ruff check . && mypy         # lint and lenient type check, configured in pyproject.toml
 ui-audit demo --no-open      # serve the demo site and audit it into .ui-audit/demo
 ui-audit demo --serve-only   # only serve it on 127.0.0.1:8765 and print the audit command
 ```

@@ -6,3 +6,7 @@ build/
 dist/
 .ui-audit/
 .serena/
+.coverage
+coverage.xml
+.ruff_cache/
+.mypy_cache/

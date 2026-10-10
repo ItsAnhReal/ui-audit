@@ -271,6 +271,8 @@ When not to use it: brand-level visual regression, where every pixel has to matc
 pip install -e ".[dev]"
 pytest                 # unit tests + end-to-end tests against the demo (a few minutes)
 pytest -m "not e2e"    # unit tests only
+pytest -n auto         # in parallel
+ruff check . && mypy   # lint and type check, as CI runs them
 ```
 
 How to contribute is in [`CONTRIBUTING.md`](https://github.com/ItsAnhReal/ui-audit/blob/main/CONTRIBUTING.md); guidance for coding agents is in [`CLAUDE.md`](https://github.com/ItsAnhReal/ui-audit/blob/main/CLAUDE.md). A finding that is not a defect gets the smallest page reproducing it in `tests/cases/` before the check changes; bug reports with such a page are the most useful kind.

@@ -21,6 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Quality Assurance",
     "Topic :: Software Development :: Testing",
 ]
@@ -35,7 +36,7 @@ Changelog = "https://github.com/ItsAnhReal/ui-audit/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 diff = ["Pillow>=10"]
-dev = ["pytest>=8", "Pillow>=10"]
+dev = ["pytest>=8", "pytest-xdist>=3.5", "pytest-cov>=5", "ruff>=0.6", "mypy>=1.11", "Pillow>=10"]
 
 [project.scripts]
 ui-audit = "ui_audit.cli:main"
@@ -49,3 +50,25 @@ ui_audit = ["probe.js", "skill/SKILL.md", "ui/*.html", "ui/*.css", "ui/*.js", "d
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["e2e: launches a real Chromium against the demo app"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = ["demo"]
+
+[tool.ruff.lint]
+# Bug-catching rules only; the code's own layout (long lines included) is not up for linting.
+select = ["E9", "F", "W", "B"]
+ignore = ["B905"]  # zip() without strict=: pairs of a list with its own tail are never equal in length
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/ui_audit"]
+ignore_missing_imports = true
+# Lenient on purpose: Optional narrowing and annotating empty literals would mean annotating
+# most of the code base. Tighten module by module.
+strict_optional = false
+disable_error_code = ["var-annotated", "func-returns-value"]
+
+[tool.coverage.run]
+source = ["ui_audit"]
