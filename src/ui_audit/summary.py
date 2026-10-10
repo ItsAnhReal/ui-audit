@@ -204,8 +204,8 @@ def render_summary(data: dict) -> str:
     for g in data["groups"]:
         widths = "–".join(str(w) for w in g["widths"]) + "px" if g["widths"] else ""
         states = [s for s in g["states"] if s != "default"]
-        states = f" [{', '.join(states)}]" if states else ""
-        lines.append(f"{g['id']}  {g['severity']} {g['check']} ×{g['count']} {', '.join(g['routes'])}{states} {widths}".rstrip())
+        state_note = f" [{', '.join(states)}]" if states else ""
+        lines.append(f"{g['id']}  {g['severity']} {g['check']} ×{g['count']} {', '.join(g['routes'])}{state_note} {widths}".rstrip())
         lines.append(f"    {g['message']}")
         if g.get("source"):
             lines.append(f"    source: {g['source']}")

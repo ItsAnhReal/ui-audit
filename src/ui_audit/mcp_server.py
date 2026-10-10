@@ -37,7 +37,7 @@ _RUN = {"type": "string", "description": "run directory (the audit's output fold
 _PAGING = {"page": {"type": "integer", "minimum": 1, "description": "page number, from 1"},
            "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": f"entries per page (default {PAGE_SIZE})"}}
 
-TOOLS = [
+TOOLS: list[dict] = [
     {"name": "audit",
      "description": "Audit a running web app for responsive layout defects across routes, UI states and widths. "
                     "Returns a compact summary: counts, causes (groups) with one example each, pages to check by hand. "
@@ -244,6 +244,7 @@ def serve(stdin=None, stdout=None) -> int:
     for line in stdin:
         if not line.strip():
             continue
+        answer: dict | list | None
         try:
             message = json.loads(line)
         except ValueError:
