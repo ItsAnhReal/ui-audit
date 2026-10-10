@@ -207,7 +207,8 @@ def test_static_report_is_safe_and_works_from_the_keyboard(tmp_path):
         page.locator(".item").first.wait_for()
         assert page.locator('a[href^="javascript"]').count() == 0  # base_url is not a web address: no "open page" link
         page.get_by_role("button", name="Copy accept command").click()
-        assert page.evaluate("window.copied").startswith(f"ui-audit accept '{tmp_path}/it'\\''s a run' ")  # one shell word
+        quoted = str(tmp_path / "it's a run").replace("'", "'\\''")  # the run folder as the OS writes it
+        assert page.evaluate("window.copied").startswith(f"ui-audit accept '{quoted}' ")  # one shell word
 
         # the focus ring shows on a ghost button that sets box-shadow: none
         settings = page.get_by_role("button", name="Settings")
