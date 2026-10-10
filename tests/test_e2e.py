@@ -311,7 +311,8 @@ def test_phone_checks_find_the_signup_page_defects(demo_site, tmp_path):
     [bars] = found(report, "sticky-covers-viewport", route)
     assert bars["widths"] == [390] and bars["selector"] == "header.top"
     [end] = found(report, "fixed-covers-end", route)
-    assert end["selector"] == "div.cta" and "By creating an account" in end["message"]
+    # The last lines; with Windows' font metrics the bar also reaches the paragraph above the legal line.
+    assert end["selector"] == "div.cta" and ("By creating an account" in end["message"] or "We keep your data" in end["message"])
     fields = found(report, "small-input-font", route)
     assert sorted(i["selector"] for i in fields) == ["#email", "#password"] and all(i["widths"] == [390] for i in fields)
     [tiny] = found(report, "tiny-text", route)
