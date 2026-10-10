@@ -219,6 +219,7 @@
     "lightbox.next": "Next",
     "lightbox.open": "Open image",
     "lightbox.prev": "Previous",
+    "lightbox.title": "Screenshot",
 
     "list.accepted": "accepted",
     "list.accepted.title": "Show accepted findings instead of open ones",
@@ -347,7 +348,9 @@
     "runs.when": "When",
 
     "settings.editor": "Open source files in",
+    "settings.keyboard": "Keyboard",
     "settings.language": "Language",
+    "settings.singleKeys": "Single-key shortcuts (j, k, /)",
     "settings.theme": "Appearance",
     "settings.title": "Settings",
 
@@ -741,6 +744,7 @@
     "lightbox.next": "Weiter",
     "lightbox.open": "Bild öffnen",
     "lightbox.prev": "Zurück",
+    "lightbox.title": "Screenshot",
 
     "list.accepted": "akzeptiert",
     "list.accepted.title": "Akzeptierte statt offene Befunde zeigen",
@@ -869,7 +873,9 @@
     "runs.when": "Wann",
 
     "settings.editor": "Quelldateien öffnen in",
+    "settings.keyboard": "Tastatur",
     "settings.language": "Sprache",
+    "settings.singleKeys": "Einzeltasten-Kürzel (j, k, /)",
     "settings.theme": "Darstellung",
     "settings.title": "Einstellungen",
 

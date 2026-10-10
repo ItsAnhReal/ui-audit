@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import os
+import queue
+import threading
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlparse
 
 from . import __version__, browser, report as report_mod, routes, semantic, states, viewports
 from .config import STANDARD_VIEWPORTS, Config
@@ -13,14 +18,53 @@ from .issues import IssueSet, coverage_key, load_accepted, mark_accepted, sweep_
 from .sources import SourceIndex
 
 NOT_APPLICABLE = frozenset({"<state not applicable>"})
-# The sweep waits for running transitions (browser.settle) rather than for a fixed time.
+# The sweep waits for loading fonts and running transitions (browser.settle), and at least two
+# animation frames after each resize, rather than for a fixed time.
 SWEEP_SETTLE_MS = 0
 CANDIDATE_FACTOR = 8
 # Below this width a page is read as a phone layout, also when phone emulation is turned off.
 MOBILE_WIDTH = 768
 
 
+# Routes measured side by side when `workers = 0`: one per two CPUs, at most this many.
+AUTO_WORKERS_MAX = 4
+
+
+def worker_count(cfg: Config) -> int:
+    """How many routes are measured at once, each in a browser of its own."""
+    return cfg.workers or max(1, min(AUTO_WORKERS_MAX, (os.cpu_count() or 2) // 2))
+
+
+@dataclass
+class _RouteWork:
+    """What measuring one route adds to the report. It is kept apart and merged in the order
+    the routes were listed, so routes measured side by side report as if one after another."""
+    route: routes.Route
+    breakpoints: list[int]
+    baseline_errors: set[str]
+    issues: list[tuple[str, tuple, dict]] = field(default_factory=list)  # IssueSet calls, in order
+    finished: list[tuple[dict, str]] = field(default_factory=list)  # (state record, status)
+    captures: list[dict] = field(default_factory=list)
+    coverage: dict[str, list[int]] = field(default_factory=dict)
+    truncated: dict[str, dict[str, set[int]]] = field(default_factory=dict)
+    errors: list[str] = field(default_factory=list)
+    sources: set[str] = field(default_factory=set)
+    logs: list[str] = field(default_factory=list)
+    probes: int = 0
+    failure: Exception | None = None
+
+    def observe(self, *args, **kwargs) -> None:
+        self.issues.append(("observe", args, kwargs))
+
+    def runtime(self, *args, **kwargs) -> None:
+        self.issues.append(("runtime", args, kwargs))
+
+
 def _file_slug(route: str) -> str:
+    # Hash-router routes ("/#/settings") get their own prefix so they don't share files with "/settings".
+    path, hashed, fragment = route.partition("#")
+    if hashed:
+        return f"{_file_slug(path)}--hash-{_file_slug(fragment)}"
     return states.slug(route.strip("/")) if route.strip("/") else "root"
 
 
@@ -41,11 +85,23 @@ def _not_a_page(response) -> str | None:
     return None if not kind or kind in {"text/html", "application/xhtml+xml"} else kind
 
 
+def _landed(url: str, base_url: str) -> str:
+    """Where a route ended up: its path, or the whole URL when it left the app's origin."""
+    here, there = urlparse(url), urlparse(base_url)
+    path, prefix = routes.normalize(url), routes.normalize(base_url)
+    if (here.scheme, here.netloc) != (there.scheme, there.netloc):
+        return f"{here.scheme}://{here.netloc}{path}"
+    if prefix != "/" and (path == prefix or path.startswith(prefix + "/")):
+        path = path[len(prefix):] or "/"  # routes are relative to a base URL with a path
+    return path
+
+
 def _skip_reason(page, response, path: str, missing: str | None, seen_pages: dict[str, str],
-                 seen_paths: dict[str, str], loading: bool = False) -> str | None:
+                 seen_paths: dict[str, str], loading: bool = False, base_url: str = "") -> str | None:
     """Why a freshly loaded route adds nothing to the audit, or None if it should be audited."""
     fingerprint = page.evaluate("() => window.__uiAudit.pageFingerprint()")
-    landed = routes.normalize(page.url)
+    # Routes are relative to the base path; a page outside it keeps its full URL and matches no route.
+    landed = routes.route_of(base_url, page.url) or page.url
     if path != "/" and (fingerprint == missing or (response is not None and response.status == 404)):
         return "not found"
     if landed != path and landed in seen_paths:
@@ -77,7 +133,13 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
     """Audit the app. `on_event(name, **data)` reports progress: "routes" once, then "route"
     as each route is measured, skipped or fails to load, and "state" as each state is done."""
     started = time.monotonic()
-    event = on_event or (lambda _name, **_data: None)
+    lock = threading.Lock()  # routes measured side by side report progress one at a time
+
+    def event(name: str, **data) -> None:
+        if on_event:
+            with lock:
+                on_event(name, **data)
+
     out_dir = Path(cfg.output)
     shots_dir = out_dir / "shots"
     shots_dir.mkdir(parents=True, exist_ok=True)
@@ -101,12 +163,12 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
     index = SourceIndex(Path(cfg.project_root))
     route_sources: dict[str, set[str]] = {}
 
-    def note_sources(page, path: str) -> None:
+    def note_sources(page, into: set[str]) -> None:
         try:
             found = page.evaluate("() => window.__uiAudit.sourceFiles()")
         except Exception:  # noqa: BLE001 - a page that navigated away has nothing to add
             return
-        route_sources.setdefault(path, set()).update(index.relative(f) for f in found)
+        into.update(index.relative(f) for f in found)
 
     # The first browser leads: it finds the routes, decides which repeat another, and finds
     # the states. The others audit exactly those routes and states, so their findings line up.
@@ -121,14 +183,74 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
         label = browser.LABELS[engine]
         where = (lambda path: path) if leading else (lambda path: f"{path} ({label})")
 
-        def finish(record: dict, path: str, status: str) -> None:
-            if leading:
-                record["status"] = status
-                state_records.append(record)
-                lead_records[(path, record["id"])] = record
-            elif (path, record["id"]) in lead_records:
-                lead_records[(path, record["id"])].setdefault("browsers", {})[engine] = status
-            event("state", path=path, state=record["id"], status=status)
+        def merge(work: _RouteWork) -> None:
+            nonlocal probe_count
+            if work.failure is not None:
+                raise work.failure
+            path = work.route.path
+            for name, args, kwargs in work.issues:
+                getattr(issue_set, name)(*args, **kwargs)
+            for record, status in work.finished:
+                if leading:
+                    record["status"] = status
+                    state_records.append(record)
+                    lead_records[(path, record["id"])] = record
+                elif (path, record["id"]) in lead_records:
+                    lead_records[(path, record["id"])].setdefault("browsers", {})[engine] = status
+            captures.extend(work.captures)
+            coverage.update(work.coverage)
+            for key, checks in work.truncated.items():
+                for check, widths in checks.items():
+                    truncated.setdefault(key, {}).setdefault(check, set()).update(widths)
+            errors.extend(work.errors)
+            route_sources.setdefault(path, set()).update(work.sources)
+            probe_count += work.probes
+
+        def measure(session: browser.Session, pending: list[_RouteWork], run_route) -> None:
+            """Measure the routes kept, in `workers` browsers at once, this one included.
+            Playwright's sync API belongs to the thread that started it, so each helper thread
+            runs a browser of its own, signed in and past the consent banner like this one."""
+            workers = min(worker_count(cfg), len(pending))
+            if workers <= 1:
+                for work in pending:
+                    run_route(session, work, log)
+                    merge(work)
+                return
+            todo: queue.SimpleQueue[_RouteWork] = queue.SimpleQueue()
+            for work in pending:
+                todo.put(work)
+            signed_in = session[0].context.storage_state()
+
+            def drain(session: browser.Session) -> None:
+                while True:
+                    try:
+                        work = todo.get_nowait()
+                    except queue.Empty:
+                        return
+                    try:
+                        run_route(session, work, work.logs.append)
+                    except Exception as exc:  # noqa: BLE001 - raised again when merged, as if sequential
+                        work.failure = exc
+                    with lock:  # each route's lines together, as it finishes
+                        for line in work.logs:
+                            log(line)
+
+            def helper() -> None:
+                try:
+                    with browser.session(cfg, engine, storage_state=signed_in) as helper_session:
+                        drain(helper_session)
+                except Exception as exc:  # noqa: BLE001 - the routes are left to the other browsers
+                    with lock:
+                        log(f"{label}: a worker browser stopped ({str(exc).splitlines()[0][:160]})")
+
+            threads = [threading.Thread(target=helper, daemon=True) for _ in range(workers - 1)]
+            for thread in threads:
+                thread.start()
+            drain(session)
+            for thread in threads:
+                thread.join()
+            for work in pending:
+                merge(work)
 
         with browser.session(cfg, engine) as opened:
             page, runtime = opened
@@ -165,6 +287,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
             seen_paths: dict[str, str] = {}
 
             measured = 0
+            pending: list[_RouteWork] = []
             for position, route in enumerate(route_list):
                 path = route.path
                 # max_routes bounds what is measured; CANDIDATE_FACTOR bounds how many pages are
@@ -180,7 +303,9 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                 except Exception as exc:  # noqa: BLE001 - keep auditing the other routes
                     errors.append(f"{where(path)}: could not load ({exc.__class__.__name__}: {str(exc)[:120]})")
                     if leading:
-                        route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": False})
+                        reason = f"{exc.__class__.__name__}: {(str(exc).splitlines() or [''])[0][:160]}"
+                        route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": False,
+                                              "error": reason})
                     event("route", path=path, status="failed", detail=exc.__class__.__name__)
                     continue
                 if cfg.states.dismiss_consent and engine_consent is None:
@@ -192,38 +317,47 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                         opened.reset_mobile()  # the phone page starts again from the storage without the banner
                         runtime.clear()
                         response = states.open_page(page, cfg, path, 1280, 900)
+                landed = _landed(page.url, cfg.base_url)
+                moved = {"landed": landed} if landed != path else {}  # a redirect, e.g. to a sign-in page
                 kind = _not_a_page(response)
                 if kind:
                     if leading:
                         route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": True,
-                                              "status": f"skipped: not a web page ({kind})"})
+                                              "status": f"skipped: not a web page ({kind})", **moved})
                     log(f"{where(path)}: skipped (not a web page: {kind})")
                     event("route", path=path, status="skipped", detail=f"not a web page ({kind})")
                     continue
                 content = page.evaluate("() => window.__uiAudit.contentState()")
-                skip = (_skip_reason(page, response, path, missing, seen_pages, seen_paths, content["state"] == "loading")
+                skip = (_skip_reason(page, response, path, missing, seen_pages, seen_paths, content["state"] == "loading",
+                                     base_url=cfg.base_url)
                         if dedupe else None)
                 if skip:
                     route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": True,
-                                          "status": f"skipped: {skip}"})
+                                          "status": f"skipped: {skip}", **moved})
                     log(f"{path}: skipped ({skip})")
                     event("route", path=path, status="skipped", detail=skip)
                     continue
                 if leading:
                     route_records.append({"path": path, "discovered_by": route.discovered_by, "loaded": True,
-                                          "status": "audited", "content": content})
-                note_sources(page, path)
+                                          "status": "audited", "content": content, **moved})
+                note_sources(page, route_sources.setdefault(path, set()))
                 if content["state"] != "ok":
                     log(f"{where(path)}: may not show its real content ({content['state']}: {content['detail']})")
                 measured += 1
                 breakpoints = page.evaluate("() => window.__uiAudit.breakpoints()")
                 all_breakpoints.update(breakpoints)
-                baseline_errors = set(runtime.console_errors) | set(runtime.failed_resources)
+                work = _RouteWork(route, breakpoints, set(runtime.console_errors) | set(runtime.failed_resources))
                 for message in runtime.console_errors:
-                    issue_set.runtime("console-error", path, "default", message, 1280, engine=engine)
+                    work.runtime("console-error", path, "default", message, 1280, engine=engine)
                 for message in runtime.failed_resources:
-                    issue_set.runtime("failed-resource", path, "default", message, 1280, engine=engine)
+                    work.runtime("failed-resource", path, "default", message, 1280, engine=engine)
+                pending.append(work)
 
+            def run_route(session: browser.Session, work: _RouteWork, say: Callable[[str], None]) -> None:
+                """Find the states of a route the lead browser kept (or take the lead's) and sweep
+                each one. Everything it finds goes into `work`, merged into the report later."""
+                page, runtime = session
+                path, breakpoints, baseline_errors = work.route.path, work.breakpoints, work.baseline_errors
                 initial_anomalies: set[int] = set()
                 if leading:
                     state_list = [states.default_state(path), *states.custom_states(cfg, path)]
@@ -231,14 +365,18 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     planned[path] = state_list
                 else:
                     state_list = planned[path]
-                log(f"{where(path)}: {len(state_list)} state(s), breakpoints {breakpoints or 'none'}")
+                say(f"{where(path)}: {len(state_list)} state(s), breakpoints {breakpoints or 'none'}")
                 event("route", path=path, status="measuring", states=len(state_list))
+
+                def finish(record: dict, status: str) -> None:
+                    work.finished.append((record, status))
+                    event("state", path=path, state=record["id"], status=status)
 
                 for state in state_list:
                     record = state.to_dict()
                     lo, hi = state.width_range(vc.min_width, vc.max_width)
                     if lo > hi:
-                        finish(record, path, "skipped: no widths in range")
+                        finish(record, "skipped: no widths in range")
                         continue
                     key_only = cfg.states.sweep == "key" and state.kind != "default" and not vc.widths
                     if vc.widths:
@@ -256,61 +394,64 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                             | (set(viewports.breakpoint_neighbors(breakpoints, lo, hi)) if vc.breakpoint_neighbors else set())
                         )
                     if not probe_widths:
-                        finish(record, path, "skipped: no widths in range")
+                        finish(record, "skipped: no widths in range")
                         continue
 
-                    first = states.first_width(opened.page_for(probe_widths[0]), cfg, state, probe_widths)
+                    runtime.clear()
+                    scout = session.page_for(probe_widths[0])
+                    first, loaded = states.first_width(scout, cfg, state, probe_widths)
                     if first is None:
-                        finish(record, path, "skipped: its control is not shown at any width")
+                        finish(record, "skipped: its control is not shown at any width")
                         continue
+                    if not loaded:
+                        runtime.clear()
                     # Narrow widths are measured on a phone page, the others on the desktop page. The
                     # state is replayed on each page the first time a width needs it.
                     applied: dict[int, bool] = {}
 
-                    def page_at(width: int, _state=state, _applied=applied):
-                        target = opened.page_for(width)
+                    def page_at(width: int, _state=state, _applied=applied, _ready=scout if loaded else None):
+                        target = session.page_for(width)
                         if id(target) not in _applied:
-                            _applied[id(target)] = states.apply(target, cfg, _state, width, viewports.height_for(width))
+                            _applied[id(target)] = states.apply(target, cfg, _state, width, viewports.height_for(width),
+                                                                target is _ready)
                         return target if _applied[id(target)] else None
 
-                    runtime.clear()
                     first_page = page_at(first)
                     if first_page is None:
-                        finish(record, path, "skipped: could not be applied")
+                        finish(record, "skipped: could not be applied")
                         continue
                     if state.kind != "default":
-                        note_sources(page, path)  # an opened dialog or menu brings its own components
+                        note_sources(first_page, work.sources)  # an opened dialog or menu brings its own components
                         new_errors = [m for m in runtime.console_errors if m not in baseline_errors]
                         # The error came with opening this state, so the component that opened is where to look.
                         layer = (first_page.evaluate("t => window.__uiAudit.layerInfo(t)", state.trigger)
                                  if new_errors else None)
                         for message in new_errors:
-                            issue_set.runtime("console-error", path, state.id, message, first, hints=layer, engine=engine)
+                            work.runtime("console-error", path, state.id, message, first, hints=layer, engine=engine)
                         for message in runtime.failed_resources:
                             if message not in baseline_errors:
-                                issue_set.runtime("failed-resource", path, state.id, message, first, engine=engine)
+                                work.runtime("failed-resource", path, state.id, message, first, engine=engine)
 
                     results: dict[int, dict] = {}
                     not_applicable: set[int] = set()
 
                     def probe(width: int, _state=state, _results=results, _na=not_applicable,
                               _page_at=page_at) -> frozenset[str]:
-                        nonlocal probe_count
                         target = _page_at(width)
                         if target is None:
                             _na.add(width)
                             return NOT_APPLICABLE
                         browser.resize(target, width, viewports.height_for(width), min(cfg.settle_ms, SWEEP_SETTLE_MS))
-                        probe_count += 1
+                        work.probes += 1
                         if _state.trigger and not target.evaluate("s => window.__uiAudit.isTriggerVisible(s)", _state.trigger):
                             _na.add(width)
                             return NOT_APPLICABLE
                         result = target.evaluate("o => window.__uiAudit.probe(o)", opts)
                         _results[width] = result
                         for raw in result["issues"]:
-                            issue_set.observe(raw, path, _state.id, width, engine)
+                            work.observe(raw, path, _state.id, width, engine)
                         for check in result.get("truncated") or {}:
-                            truncated.setdefault(coverage_key(path, _state.id, engine), {}).setdefault(check, set()).add(width)
+                            work.truncated.setdefault(coverage_key(path, _state.id, engine), {}).setdefault(check, set()).add(width)
                         return sweep_signature(result)
 
                     try:
@@ -319,11 +460,11 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                         if state.kind == "default":
                             initial_anomalies.update(sweep.anomalies)
                     except Exception as exc:  # noqa: BLE001 - one broken state must not end the audit
-                        coverage[coverage_key(path, state.id, engine)] = sorted(results)
-                        errors.append(f"{where(path)} [{state.id}]: {str(exc)[:160]}")
-                        finish(record, path, f"failed: {exc.__class__.__name__}")
+                        work.coverage[coverage_key(path, state.id, engine)] = sorted(results)
+                        work.errors.append(f"{where(path)} [{state.id}]: {str(exc)[:160]}")
+                        finish(record, f"failed: {exc.__class__.__name__}")
                         continue
-                    coverage[coverage_key(path, state.id, engine)] = sorted(results)
+                    work.coverage[coverage_key(path, state.id, engine)] = sorted(results)
 
                     standard = [w for _, w, _ in STANDARD_VIEWPORTS if lo <= w <= hi]
                     if vc.widths:
@@ -338,21 +479,23 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                             vc.max_captures, lo, hi)
                     plans = [p for p in plans if p.width not in not_applicable]
                     if state.kind == "default":
-                        _check_viewport_meta(first_page, issue_set, path, engine, plans, results, vc.mobile_below or MOBILE_WIDTH)
+                        _check_viewport_meta(first_page, work, path, engine, plans, results, vc.mobile_below or MOBILE_WIDTH)
 
                     for plan in plans:
                         try:
                             target = page_at(plan.width)
                             if target is None:
                                 continue
-                            captures.append(_capture(target, cfg, shots_dir, out_dir, path, state, plan, results, probe, engine))
+                            work.captures.append(_capture(target, cfg, shots_dir, out_dir, path, state, plan, results, probe, engine))
                         except Exception as exc:  # noqa: BLE001 - keep the other screenshots
-                            errors.append(f"{where(path)} [{state.id}] {plan.width}px: screenshot failed ({str(exc)[:120]})")
+                            work.errors.append(f"{where(path)} [{state.id}] {plan.width}px: screenshot failed ({str(exc)[:120]})")
                     if leading:
                         record["probed_widths"] = len(results)
                         record["captures"] = len(plans)
-                    finish(record, path, "audited")
-                    log(f"  {state.id}: {len(results)} widths probed, {len(plans)} captured")
+                    finish(record, "audited")
+                    say(f"  {state.id}: {len(results)} widths probed, {len(plans)} captured")
+
+            measure(opened, pending, run_route)
 
     # Only browsers that finished count as audited: a finding is "only in" some browsers only
     # where the others were really measured.
@@ -423,7 +566,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
     return result
 
 
-def _check_viewport_meta(page, issue_set: IssueSet, path: str, engine: str, plans: list, results: dict,
+def _check_viewport_meta(page, issue_set: IssueSet | _RouteWork, path: str, engine: str, plans: list, results: dict,
                          narrow_below: int) -> None:
     """Report a missing or zoom-blocking meta viewport once per route, at the narrowest width
     captured (or probed) below `narrow_below`, so it comes with a phone screenshot."""
@@ -459,7 +602,7 @@ def _capture(page, cfg: Config, shots_dir: Path, out_dir: Path, path: str, state
     found = results.get(width, {}).get("issues", [])
     capture = {
         "route": path, "state": state.id, "width": width, "height": height, "browser": engine, "reasons": plan.reasons,
-        "file": str(clean.relative_to(out_dir)), "issue_count": len(found),
+        "file": clean.relative_to(out_dir).as_posix(), "issue_count": len(found),
     }
     if cfg.annotate and found:
         items = [{"selector": i["selector"], "severity": i["severity"], "check": i["check"], "index": n}
@@ -468,5 +611,5 @@ def _capture(page, cfg: Config, shots_dir: Path, out_dir: Path, path: str, state
         annotated = shots_dir / f"{base}__annotated.png"
         page.screenshot(path=str(annotated), full_page=True, clip=clip)
         page.evaluate("() => window.__uiAudit.clearAnnotations()")
-        capture["annotated"] = str(annotated.relative_to(out_dir))
+        capture["annotated"] = annotated.relative_to(out_dir).as_posix()
     return capture

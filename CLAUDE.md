@@ -10,19 +10,23 @@ Guidance for Claude Code (and Codex via AGENTS.md) working on this repository.
 
 ```bash
 pip install -e ".[dev]"      # Python ≥3.11
-pytest                       # all tests; e2e tests launch Chromium against demo/ (~1 min)
+pytest                       # all tests; e2e tests launch Chromium against the demo site (~1 min)
 pytest -m "not e2e"          # fast unit tests
-python3 -m http.server 8765 -d demo &   # serve the demo app
-ui-audit audit http://localhost:8765 --project-root demo --output /tmp/run
+pytest -n auto               # in parallel (pytest-xdist); CI runs this
+ruff check . && mypy         # lint and lenient type check, configured in pyproject.toml
+ui-audit demo --no-open      # serve the demo site and audit it into .ui-audit/demo
+ui-audit demo --serve-only   # only serve it on 127.0.0.1:8765 and print the audit command
 ```
 
 If Playwright's pinned Chromium is missing, `browser.launch()` falls back to any Chromium under `PLAYWRIGHT_BROWSERS_PATH`, `~/.cache/ms-playwright` or `/opt/pw-browsers`; `UI_AUDIT_BROWSER_PATH` overrides.
 
 ## Layout
 
+Modules live in `src/ui_audit/`.
+
 | Module | Responsibility |
 |---|---|
-| `cli.py` | argparse commands: `init`, `doctor`, `audit`, `login`, `accept`, `report`, `ui`, `merge-findings`, `verify`, `install-skill`, `ci` |
+| `cli.py` | argparse commands: `init`, `doctor`, `demo`, `audit`, `login`, `accept`, `report`, `ui`, `merge-findings`, `verify`, `show`, `mcp`, `install-skill`, `ci`; `--json` on `audit`/`verify` |
 | `config.py` | dataclass config, `ui-audit.toml` loading (unknown keys are errors), template |
 | `audit.py` | the pipeline: routes → states → sweep → captures → source hints → reports |
 | `probe.js` | injected as an init script; all in-page measurement, state candidates, annotations |
@@ -34,10 +38,11 @@ If Playwright's pinned Chromium is missing, `browser.launch()` falls back to any
 | `report.py`, `semantic.py`, `verify.py` | report.json/index.html, agent review packet + merge, baseline comparison |
 | `ui/` | the viewer and app front end (`index.html`, `app.css`, `i18n.js`, `app.js`); `report.py` assembles them into one page, with report data inlined (static `index.html`) or an app token (`ui-audit ui`) |
 | `server.py` | `ui-audit ui`: stdlib HTTP server on 127.0.0.1, run list, job queue, accept/re-check/compare API |
+| `summary.py`, `mcp_server.py` | compact views of a run for agents (`--json`, `show`); `ui-audit mcp`, a stdlib MCP server over stdio (stdout carries protocol messages only) |
 | `runner.py` | one audit in a subprocess for the app: JSON spec on stdin, JSON-line progress events on stdout |
-| `ci.py`, `action.yml` | `ui-audit ci` (start the app per checkout, audit head and base commit, verify, Markdown summary, sticky PR comment) and the composite GitHub Action that wraps it; `.github/workflows/action.yml` runs the action against `demo/` |
+| `ci.py`, `action.yml` | `ui-audit ci` (start the app per checkout, audit head and base commit, verify, Markdown summary, sticky PR comment) and the composite GitHub Action that wraps it; `.github/workflows/action.yml` runs the action against the demo site |
 | `skill/SKILL.md` | the shared agent skill shipped with the package |
-| `demo/` | deliberately broken site; its README lists every planted defect |
+| `demo/` | deliberately broken site, shipped as package data for `ui-audit demo`; its README lists every planted defect |
 
 ## Invariants
 
@@ -47,7 +52,7 @@ If Playwright's pinned Chromium is missing, `browser.launch()` falls back to any
 - `verify` must never count something as fixed that the new run did not look at.
 - Automatic state discovery must stay conservative: no forms, no navigation, no destructive-sounding controls.
 - The sweep stays bounded: `max_refinements` and `max_captures` caps are part of the product, not tuning knobs to remove.
-- Every planted defect in `demo/` has an end-to-end assertion; add one when you add a check.
+- Every planted defect in `src/ui_audit/demo/` has an end-to-end assertion; add one when you add a check.
 - The app server only binds 127.0.0.1, checks the Host header and requires its token on every API call; screenshots need its SameSite=Strict cookie. Every text in `ui/app.js` goes through `t()` and exists in both languages of `ui/i18n.js` (`tests/test_i18n.py`).
 - A check that reported something that is not a defect gets the smallest page reproducing it in `tests/cases/` before the check changes; the first line of each case states what an audit must report.
 

@@ -1,0 +1,102 @@
+# Publishes a release when a version tag is pushed: PyPI (Trusted Publishing), a GitHub Release with
+# the CHANGELOG section as notes, and the major tag (v0) moved to the release commit for the Action.
+# CONTRIBUTING.md#releasing has the one-time setup and the steps.
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check the tag matches the package version
+        id: version
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $version in pyproject.toml"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Take the release notes from CHANGELOG.md
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # The section under "## <version>" (the rest of that heading line may say anything) up to the next "## ".
+          awk -v head="## $VERSION" '
+            index($0, head) == 1 && substr($0, length(head) + 1, 1) ~ /^( |)$/ { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "::error::CHANGELOG.md has no section \"## $VERSION\""
+            exit 1
+          fi
+
+      - name: Build the sdist and wheel
+        run: |
+          python -m pip install build
+          python -m build
+          python -m zipfile -l dist/*.whl | grep -q 'ui_audit/demo/index.html'   # `ui-audit demo` needs it
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ui-audit/
+    permissions:
+      id-token: write   # Trusted Publishing: no API token is stored anywhere
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "$GITHUB_REF_NAME" --notes-file release-notes.md
+
+      - name: Move the major tag to this release
+        run: |
+          major="${GITHUB_REF_NAME%%.*}"   # v0.1.0 -> v0
+          git tag -f "$major" "$GITHUB_SHA"
+          git push -f origin "refs/tags/$major"

@@ -13,11 +13,9 @@ Discover → Sweep → Capture → Diagnose → Map to code → Patch → Target
 ## Try it in a minute
 
 ```bash
-git clone https://github.com/ItsAnhReal/ui-audit && cd ui-audit
-pip install -e .                 # Python 3.11+
+pipx install --include-deps ui-audit   # Python 3.11+; until 0.1.0 is on PyPI, see Install
 playwright install chromium
-python3 -m http.server 8765 -d demo &
-ui-audit audit http://localhost:8765 --project-root demo --open
+ui-audit demo                          # serves the bundled demo site, audits it, opens the report
 ```
 
 The demo is a small site with planted defects. The one in the screenshot above is the point: four fixed columns that overflow only between 800 and 946 px, invisible at every common device preset.
@@ -33,9 +31,11 @@ Responsive bugs live *between* presets: a grid that overflows from 800 to 946 px
 ## Install
 
 ```bash
-pipx install git+https://github.com/ItsAnhReal/ui-audit   # or: pip install -e . in a checkout; Python 3.11+
-playwright install chromium      # or point --browser-path / UI_AUDIT_BROWSER_PATH at an existing Chromium
+pipx install --include-deps ui-audit   # from PyPI once 0.1.0 is published; until then: pipx install --include-deps git+https://github.com/ItsAnhReal/ui-audit
+playwright install chromium            # or point --browser-path / UI_AUDIT_BROWSER_PATH at an existing Chromium
 ```
+
+Python 3.11+. `--include-deps` puts Playwright's `playwright` command on your path too; plain `pip install ui-audit` works as well.
 
 ## Use
 
@@ -68,19 +68,52 @@ To re-check with the settings an earlier run used (app address, sign-in, languag
 
 `verify` reports **fixed**, **introduced** and **persistent** issues. A baseline issue only counts as fixed if the new run probed its route, state and at least one of its widths, and its check reported everything it found there (each check reports at most `max_issues_per_check` findings per width, and the control checks look at the first 400 controls; `coverage_truncated` in report.json records where that cut in). Everything else is counted as out of scope. New issues on a route or state the baseline did not audit are listed as **new scope**, not introduced. Agent findings only count as fixed after a new semantic review. Exit code 1 means a P1/P2 issue was introduced (`--strict` also fails on persistent ones); `ui-audit ci` also counts new-scope issues as new in the change.
 
+### Exit codes
+
+Every command uses the same codes, so a script or an agent can tell a finding from a broken run:
+
+| Code | Meaning |
+|---|---|
+| 0 | done, nothing over the threshold |
+| 1 | findings over the threshold: `audit --fail-on`, `verify` (introduced, or persistent with `--strict`), `ci --fail-on` |
+| 2 | usage error: a bad option or `ui-audit.toml`, a missing or unreadable `report.json` or findings file, invalid agent findings, `init` over an existing file |
+| 3 | the app or the audit failed: a route did not load, no route was measured, most routes ended on one other page (an expired sign-in, usually), the audit crashed, or `doctor` found a problem |
+
+On 3, `report.json` is still written, but 0 findings in it do not mean the app is fine.
+
 ### Agent skill
 
 ```bash
 ui-audit install-skill                 # .claude/skills/ui-audit and .codex/skills/ui-audit in this project
 ui-audit install-skill --scope user    # ~/.claude/skills and ~/.codex/skills
+ui-audit install-skill --target agents # .agents/skills/ui-audit, read by Cursor, Gemini CLI, OpenCode and others (--target all: every one)
 ```
 
-The skill (`src/ui_audit/skill/SKILL.md`) tells the agent how to run the loop: baseline, semantic review, triage, patch, targeted rerun, verify, full regression, and when to stop.
+The skill (`src/ui_audit/skill/SKILL.md`) tells the agent how to run the loop: start the app, baseline, read the groups, triage (accept what is intentional), patch, targeted rerun, verify, full regression, and when to stop. `ui-audit init` also prints three lines to paste into `AGENTS.md` for agents without skills.
+
+`report.json` is large (about 25k tokens for the three demo pages), so agents read compact views instead:
+
+```bash
+ui-audit audit <url> --json                       # summary on stdout, logs on stderr: counts, causes with one example each, pages to check by hand, errors
+ui-audit show .ui-audit/latest [--json]           # the same summary for an existing run
+ui-audit show .ui-audit/latest --group <id>       # one cause in full: every finding, widths, evidence, source candidates, screenshots, re-check command
+ui-audit verify <baseline> <current> --json       # fixed, introduced, persistent, out of scope
+```
+
+### MCP
+
+`ui-audit mcp` serves the same tools over the Model Context Protocol (stdio), for clients without skills such as Claude Desktop, Cursor and Windsurf: `audit`, `verify`, `list_findings` (paged causes, or the findings of one), `get_screenshot` (the PNG of a finding) and `accept`. Add it to the client's MCP settings (`claude_desktop_config.json`, `.cursor/mcp.json`):
+
+```json
+{"mcpServers": {"ui-audit": {"command": "ui-audit", "args": ["mcp"]}}}
+```
+
+The server runs in the folder the client starts it in, so relative paths and `ui-audit.toml` resolve from there; pass absolute run directories if unsure.
 
 ## The app
 
 ```bash
-ui-audit ui                                   # http://127.0.0.1:8484, opens in your browser
+ui-audit ui                                   # http://127.0.0.1:8484/?k=…, opens in your browser
 ui-audit ui --config .ui-audit/shop.toml      # another settings file; --runs DIR, --port N, --no-open
 ```
 
@@ -92,7 +125,7 @@ A local web app for the whole loop, started in your project folder. It lists eve
 - **re-check a fix**: measures just those pages at the edges of where the finding was seen (and one pixel outside them) and says whether it is gone, using the same rule as `verify`.
 - **accept** a finding with a reason (written to `ui-audit.accepted.json`, so later runs keep it), **compare** two runs, open a run's folder, delete old runs.
 
-The server listens on 127.0.0.1 only, answers only to `127.0.0.1` and `localhost` host names, and requires a per-start token for every API call, so other websites cannot reach it. Each audit runs in its own process (`python -m ui_audit.runner`), one at a time.
+The server listens on 127.0.0.1 only, answers only to `127.0.0.1` and `localhost` host names, and requires a per-start token for every API call, so other websites cannot reach it. The page itself opens only from the address printed at start, which carries a secret key (`?k=…`), so other users on the same machine cannot use it either; reopening that address works for as long as the server runs. Each audit runs in its own process (`python -m ui_audit.runner`), one at a time.
 
 ## Checks
 
@@ -135,11 +168,14 @@ Actions: `click`, `hover`, `fill` + `value`, `press`, `wait`, `wait_for`. For lo
 
 ## Faster runs
 
-A full audit sweeps every route and every opened menu, tab and dialog across the whole width range. Three ways to spend less:
+A full audit sweeps every route and every opened menu, tab and dialog across the whole width range. Four ways to spend less:
 
 - `--fast` (or `[states] sweep = "key"`) still sweeps each route's initial page fully, but probes opened states only at the presets, the breakpoints and the widths where the initial page changed.
 - `--changed-since <git ref>` audits only the routes that render a file changed since that ref. It reads which components each route rendered from a previous full report (`--baseline`, default: the output directory), which a dev build of React, Vue or Svelte reveals. A changed stylesheet, helper or component that no audited page rendered could affect anything, so then every route is audited; the command says which case applied.
 - `--no-annotate` saves each screenshot once instead of twice. The viewer draws the boxes itself; only the agent's review packet loses its annotated images.
+- `--workers N` (or `workers = N`) measures N routes at once, each in a browser of its own; `0` picks from the CPU count. Findings and their order are the same as with one. Routes are still found and compared one after another in the first browser, and the others start with its cookies and local storage. Leave it at 1 if the app rotates sign-in tokens on use: browsers sharing one session can sign each other out. The demo takes 43 s with one worker and 26 s with two.
+
+Analytics requests (Google Analytics, Plausible, Segment and similar) are turned away by default, so pages go idle sooner; `block_requests` lists more hosts to block, or `[]` to block none.
 
 ## Languages
 
@@ -166,6 +202,10 @@ The repository is also a GitHub Action. On every pull request it starts your app
 name: ui-audit
 on: pull_request
 
+concurrency:   # a new push cancels the audit of the one before
+  group: ui-audit-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ui-audit:
     runs-on: ubuntu-latest
@@ -174,10 +214,12 @@ jobs:
       pull-requests: write   # for the comment
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false   # keeps the token out of .git/config, where `npm ci` could read it
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - uses: ItsAnhReal/ui-audit@main
+      - uses: ItsAnhReal/ui-audit@v0
         with:
           url: http://localhost:3000
           install: npm ci
@@ -185,7 +227,11 @@ jobs:
           args: --fast
 ```
 
-`install` and `start` run in each checkout; `start` stays in the background and is stopped after each audit, so both runs use the same port. The token that posts the comment is kept away from `install`, `start` and the audit, which run the pull request's code. The comment is updated on later pushes rather than repeated, the job summary carries the same text, and both reports with their screenshots are uploaded as the `ui-audit-report` artifact (open `head/index.html`).
+`install` and `start` run in each checkout; `start` stays in the background and is stopped after each audit, so both runs use the same port. The comment is updated on later pushes rather than repeated, the job summary carries the same text, and both reports with their screenshots are uploaded as the `ui-audit-report` artifact (open `head/index.html`).
+
+`install`, `start` and the audit run the pull request's code. The step that runs them gets no token; a later step posts the comment once the app has stopped, and only that step gets `github-token`. This keeps the token out of their environment, but it is not a sandbox: in the same job, the pull request's code runs as the same user and could leave a process behind or change files that later step uses. That matters little on `pull_request`, where pull requests from forks get a read-only token and others come from people who can push anyway. For a hard boundary, comment from a separate job (below).
+
+The base commit is fetched by its SHA, which needs no credentials in a public repository. In a private one, either keep the persisted credentials (drop `persist-credentials: false`) or let checkout fetch the history while it still has the token: add `fetch-depth: 0` next to `persist-credentials: false`.
 
 | Input | Default | |
 |---|---|---|
@@ -198,8 +244,40 @@ jobs:
 | `fail-on` | `new` | `new` (a P1 or P2 introduced), `P1`/`P2`/`P3` (any open finding at that level), or `never`; unless `never`, a base commit that cannot be audited fails the job too |
 | `args` | | more `ui-audit audit` options, e.g. `--fast --route / --route /pricing` |
 | `comment` | `true` | comment on the pull request (pull requests from forks get a read-only token; the job summary still works) |
+| `comment-file` | | only post this `summary.md` as the comment, nothing else (for a `workflow_run` job) |
 
-Outputs: `p1`, `p2`, `p3`, `introduced`, `fixed`, `blocking`, `report-dir`, `summary-file`. Pin the action to a commit SHA if you want the same checks on every run.
+Outputs: `p1`, `p2`, `p3`, `introduced`, `fixed`, `blocking`, `report-dir`, `summary-file`. `v0` exists from the first release on and moves to every 0.x release; pin a release tag such as `v0.1.0`, or a commit SHA, if you want the same checks on every run.
+
+To comment on pull requests from forks too, and to keep the token out of any job that runs their code, set `comment: false` in the workflow above and post the comment from a second workflow. It runs after the first one, downloads its artifact and never checks out the pull request:
+
+```yaml
+# .github/workflows/ui-audit-comment.yml
+name: ui-audit comment
+on:
+  workflow_run:
+    workflows: [ui-audit]
+    types: [completed]
+
+jobs:
+  comment:
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read          # to download the artifact
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ui-audit-report
+          path: ui-audit-report
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - uses: ItsAnhReal/ui-audit@main
+        with:
+          comment-file: ui-audit-report/summary.md
+```
+
+With `comment-file`, the action installs nothing and only updates the comment. The artifact comes from a run of the pull request's code, so the pull request number in it (`pull-request.json`) is only used when that pull request's head is still the commit the run audited.
 
 The action is a thin wrapper around `ui-audit ci`, which works the same way in any other CI system:
 
@@ -207,7 +285,7 @@ The action is a thin wrapper around `ui-audit ci`, which works the same way in a
 ui-audit ci http://localhost:3000 --install "npm ci" --start "npm run dev -- --port 3000" --base-ref origin/main --args "--fast"
 ```
 
-It exits 1 when `--fail-on` is met and 2 when the app or the audit could not run, and writes both reports and `summary.md` to `.ui-audit/ci`.
+It exits 1 when `--fail-on` is met and 3 when the app or the audit could not run, and writes both reports and `summary.md` to `.ui-audit/ci`. It never reads a token unless you pass `--comment`; on GitHub, `ui-audit ci --post-comment .ui-audit/ci/summary.md` in a later step posts or updates the comment with the token in `GITHUB_TOKEN`.
 
 ## Pages behind a login
 
@@ -216,7 +294,7 @@ ui-audit login --path /auth          # opens a browser window; sign in, then pre
 ui-audit audit --storage-state .ui-audit/auth.json
 ```
 
-`login` saves the browser's cookies and local storage to `.ui-audit/auth.json` (or `--save <file>`); set `storage_state` in `ui-audit.toml` to use it on every run. You type the password yourself, in the browser; `ui-audit` never sees or stores it. The saved file works like a password for that account, so keep `.ui-audit/` out of version control, and sign in again when the session expires.
+`login` saves the browser's cookies and local storage to `.ui-audit/auth.json` (or `--save <file>`); set `storage_state` in `ui-audit.toml` to use it on every run. You type the password yourself, in the browser; `ui-audit` never sees or stores it. The saved file works like a password for that account, so keep `.ui-audit/` out of version control, and sign in again when the session expires. When most routes (at least three, and 80% of those that loaded) end on the same other page, `audit` names that page and exits 3 instead of reporting the sign-in page as everything.
 
 ## Pages that measure clean for the wrong reason
 
@@ -224,7 +302,7 @@ A page that is still loading, shows an error or "unavailable" message, or is alm
 
 ## Consent banners and setup
 
-A cookie banner sits on top of every page and hides what is under it. With `[states] dismiss_consent = true` (the default) `ui-audit` looks for the banner's button that turns optional cookies down ("Only necessary", "Reject", "Ablehnen", …), clicks it once, and audits the pages a returning visitor sees. It never clicks "Accept all". The label it clicked is recorded as `consent_dismissed` in `report.json`. Set it to `false` to audit the first-visit view with the banner open.
+A cookie banner sits on top of every page and hides what is under it. With `[states] dismiss_consent = true` (the default) `ui-audit` looks for the banner's button that turns optional cookies down ("Only necessary", "Reject", "Ablehnen", …), clicks it once, and audits the pages a returning visitor sees. It only clicks inside a dialog or a fixed or floating box whose own text is about cookies or privacy, and never "Accept all". The label it clicked is recorded as `consent_dismissed` in `report.json`. Set it to `false` to audit the first-visit view with the banner open.
 
 For anything else that has to be out of the way first, list actions in `setup`; they run once on `/` before anything is measured (a failure there is reported in `errors`), and again on every page that is loaded, so a dismissal the app does not remember stays dismissed. An action whose target is not on the page is skipped:
 
@@ -234,7 +312,9 @@ setup = [{ click = "#close-promo" }]
 
 ## Routes
 
-Discovered from `[routes] include`, framework conventions in `project_root` (Next.js app and pages routers, Nuxt, Astro, SvelteKit, React Router route tables, static `*.html`), `sitemap.xml`, and a same-origin crawl. Dynamic routes are listed as skipped until you give a sample in `[routes] samples`.
+Discovered from `[routes] include`, framework conventions in `project_root` (Next.js app and pages routers, Nuxt, Astro, SvelteKit, Remix and React Router flat routes in `app/routes`, React Router route tables, static `*.html`), sitemaps, and a same-origin crawl. Dynamic routes are listed as skipped until you give a sample in `[routes] samples`.
+
+Routes are paths relative to `base_url`: for an app at `http://localhost:3000/app/`, the route `/settings` is `http://localhost:3000/app/settings`, and links outside `/app/` are not followed. Hash-router pages are routes of their own (`/#/settings`); plain in-page anchors (`#section`) are not. Sitemaps are read from `sitemap.xml` under `base_url` and from the `Sitemap:` lines of `/robots.txt`, following sitemap indexes; they are always fetched from the audited app, and entries naming the production host count by their path.
 
 In a project whose `package.json` names a client-side router (React Router, Vue Router, …) and no file-based one, `pages/` is a folder of components, so its file names are not treated as URLs; only the route table counts.
 
@@ -246,11 +326,11 @@ For each issue, development builds give runtime hints (React `_debugSource` and 
 
 ## Demo
 
-`demo/` is a small static site with deliberately planted defects (see `demo/README.md`):
+A small static site with deliberately planted defects ships with the package (they are listed in [`src/ui_audit/demo/README.md`](https://github.com/ItsAnhReal/ui-audit/blob/main/src/ui_audit/demo/README.md)):
 
 ```bash
-python3 -m http.server 8765 -d demo &
-ui-audit audit http://localhost:8765 --project-root demo
+ui-audit demo                 # serve it on 127.0.0.1:8765, audit it into .ui-audit/demo, open the report
+ui-audit demo --serve-only    # only serve it and print the audit command; also --port N, --output DIR, --no-open
 ```
 
 ## How it compares
@@ -262,20 +342,24 @@ ui-audit audit http://localhost:8765 --project-root demo
 | Polypane, Responsively | Show many viewports side by side for a person to look at | Runs unattended and tells an agent what is broken, where, and in which file |
 | Playwright MCP, Chrome DevTools MCP | Give an agent a browser to drive | A systematic sweep, findings grouped by cause, and `verify` to prove a fix |
 
+When not to use it: brand-level visual regression, where every pixel has to match an approved design, is what Percy or Chromatic are for.
+
 ## Development
 
 ```bash
 pip install -e ".[dev]"
 pytest                 # unit tests + end-to-end tests against the demo (a few minutes)
 pytest -m "not e2e"    # unit tests only
+pytest -n auto         # in parallel
+ruff check . && mypy   # lint and type check, as CI runs them
 ```
 
-Guidance for contributors and coding agents is in [`CLAUDE.md`](CLAUDE.md). A finding that is not a defect gets the smallest page reproducing it in `tests/cases/` before the check changes; bug reports with such a page are the most useful kind.
+How to contribute is in [`CONTRIBUTING.md`](https://github.com/ItsAnhReal/ui-audit/blob/main/CONTRIBUTING.md); guidance for coding agents is in [`CLAUDE.md`](https://github.com/ItsAnhReal/ui-audit/blob/main/CLAUDE.md). A finding that is not a defect gets the smallest page reproducing it in `tests/cases/` before the check changes; bug reports with such a page are the most useful kind.
 
 ## Status
 
-Version 0.1.0, alpha. Tested on two of the author's own apps and on Docusaurus, the Astro blog starter and the Bootstrap examples; [`CHANGELOG.md`](CHANGELOG.md) lists what those runs changed. Known limits: Chromium only; source mapping is weak in production builds; automatic state discovery is intentionally shallow.
+Version 0.1.0, alpha. Tested on two of the author's own apps and on Docusaurus, the Astro blog starter and the Bootstrap examples; [`CHANGELOG.md`](https://github.com/ItsAnhReal/ui-audit/blob/main/CHANGELOG.md) lists what those runs changed. Audits run in Chromium, and with `--browsers` also in WebKit and Firefox. Known limits: source mapping is weak in production builds; automatic state discovery is intentionally shallow.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](https://github.com/ItsAnhReal/ui-audit/blob/main/LICENSE)

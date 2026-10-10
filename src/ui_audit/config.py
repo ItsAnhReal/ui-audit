@@ -112,6 +112,10 @@ class Config:
     accepted_file: str = "ui-audit.accepted.json"
     # Actions run once on "/" before anything is measured, e.g. [{click = "#close-promo"}].
     setup: list[dict[str, Any]] = field(default_factory=list)
+    # Requests turned away: "trackers" (analytics that render nothing) or host names. [] blocks nothing.
+    block_requests: list[str] = field(default_factory=lambda: ["trackers"])
+    # Routes measured at the same time, each in a browser of its own; 0 picks from the CPU count.
+    workers: int = 1
     routes: RouteConfig = field(default_factory=RouteConfig)
     states: StateConfig = field(default_factory=StateConfig)
     viewports: ViewportConfig = field(default_factory=ViewportConfig)
@@ -133,7 +137,7 @@ class ConfigError(ValueError):
     pass
 
 
-def _build(cls: type, data: dict[str, Any], where: str):
+def _build(cls: Any, data: dict[str, Any], where: str):
     known = cls.__dataclass_fields__
     unknown = sorted(set(data) - set(known))
     if unknown:
@@ -172,6 +176,9 @@ def _number(value, where: str, low: float | None = None, high: float | None = No
 def validate(cfg: Config) -> None:
     """Reject numbers out of range, with the key that holds them."""
     _number(cfg.settle_ms, "settle_ms", 0)
+    _number(cfg.workers, "workers", 0, 16)
+    if not isinstance(cfg.block_requests, list) or not all(isinstance(e, str) for e in cfg.block_requests):
+        raise ConfigError('block_requests must be a list of host names or "trackers"')
     _number(cfg.routes.max_routes, "routes.max_routes", 1)
     _number(cfg.routes.crawl_depth, "routes.crawl_depth", 0)
     _number(cfg.states.max_per_route, "states.max_per_route", 0)
@@ -231,6 +238,10 @@ browser_path = ""
 browsers = ["chromium"]
 # Actions run on "/" before anything is measured and again on every page loaded.
 # setup = [{{ click = "#close-promo" }}]
+# Requests turned away: "trackers" (analytics that render nothing) or host names; [] for none.
+block_requests = ["trackers"]
+# Routes measured at the same time, each in its own browser; 0 picks from the CPU count.
+workers = 1
 
 [routes]
 include = {include}

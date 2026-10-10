@@ -72,7 +72,8 @@ def call(server, path, body=None, token=True, host=None, cookie=None):
             kind = response.headers.get("Content-Type", "")
             return response.status, (json.loads(raw) if "json" in kind else raw), response.headers
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read() or b"{}"), exc.headers
+        raw = exc.read()
+        return exc.code, (json.loads(raw or b"{}") if "json" in exc.headers.get("Content-Type", "") else raw), exc.headers
 
 
 def test_recheck_looks_at_both_edges_just_outside_them_and_the_middle():
@@ -85,18 +86,53 @@ def test_recheck_looks_at_both_edges_just_outside_them_and_the_middle():
 
 def test_page_carries_a_token_and_a_strict_policy(app):
     server, _ = app
-    status, page, headers = call(server, "/", token=False)
+    status, page, headers = call(server, f"/?k={server.key}", token=False)
+    assert status == 200 and server.token not in page.decode()
+    assert 'http-equiv="refresh" content="0;url=/"' in page.decode()  # on to the page, without the key
+    cookie = headers["Set-Cookie"]
+    assert "SameSite=Strict" in cookie and "HttpOnly" in cookie and "Path=/;" in cookie
+    status, page, headers = call(server, "/", token=False, cookie=cookie.split(";")[0])
     assert status == 200
     assert server.token in page.decode()
     assert "default-src 'none'" in headers["Content-Security-Policy"]
-    assert "SameSite=Strict" in headers["Set-Cookie"] and "HttpOnly" in headers["Set-Cookie"]
     assert headers["Cache-Control"] == "no-store"
+
+
+def test_the_page_needs_the_key_from_the_terminal(app):
+    server, _ = app
+    assert server.launch_url == f"{server.url}?k={server.key}"
+    status, page, headers = call(server, "/", token=False)
+    assert status == 403 and server.token not in page.decode() and "Set-Cookie" not in headers
+    assert "printed in the terminal" in page.decode() and "Terminal" in page.decode()  # both languages
+    status, page, headers = call(server, "/?k=guess", token=False)
+    assert status == 403 and "Set-Cookie" not in headers
+    assert call(server, "/", token=False, cookie=f"{server.cookie}=guess")[0] == 403
+    # reopening the printed address keeps working while the server runs
+    assert call(server, f"/?k={server.key}", token=False)[0] == 200
+    assert call(server, f"/?k={server.key}", token=False)[0] == 200
+
+
+def test_bad_request_lengths_are_refused_or_read_as_empty(app):
+    import http.client
+
+    server, _ = app
+    for length, expected in (("-5", 400), ("nonsense", 400), (str(2_000_000), 413)):  # 400: read as {}, no run named
+        conn = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+        conn.putrequest("POST", "/api/compare", skip_host=True)
+        conn.putheader("Host", f"127.0.0.1:{server.port}")
+        conn.putheader("X-UI-Audit-Token", server.token)
+        conn.putheader("Content-Length", length)
+        conn.endheaders()
+        response = conn.getresponse()
+        assert response.status == expected, (length, response.status)  # never a crash or a hang
+        conn.close()
 
 
 def test_other_hosts_and_missing_tokens_are_refused(app):
     server, _ = app
     assert call(server, "/", host="evil.example:80")[0] == 403  # DNS rebinding
     assert call(server, "/api/state", token=False)[0] == 403
+    assert call(server, f"/?k={server.key}", host="evil.example:80")[0] == 403
     status, data, _ = call(server, "/api/state")
     assert status == 200 and data["project"] == "shop"
     assert [r["name"] for r in data["runs"]] == ["shop-20260102-090000", "shop-20260101-090000"]
@@ -168,6 +204,14 @@ def test_bad_audit_requests_are_explained(app):
     assert call(server, "/api/runs", {"storage_state": "/etc/passwd"})[1]["error"].startswith("unknown session file")
     assert call(server, "/api/runs", {"changed_since": "main; rm -rf /"})[0] == 400
     assert call(server, "/api/state")[1]["jobs"] == []  # nothing was started
+
+
+def test_sessions_are_saved_only_next_to_the_runs(app):
+    server, project = app
+    for save in ("../package.json", "../../x.json", "/tmp/x.json", "sub/auth.json", "auth.txt", ".hidden.json"):
+        status, data, _ = call(server, "/api/login", {"base_url": "http://localhost:3000", "save": save})
+        assert status == 400 and "plain .json file name" in data["error"], save
+    assert call(server, "/api/state")[1]["jobs"] == []
 
 
 def test_recheck_of_unknown_findings_is_refused(app):

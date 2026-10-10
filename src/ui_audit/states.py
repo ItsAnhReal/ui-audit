@@ -76,29 +76,33 @@ def open_page(page, cfg, route: str, width: int, height: int):
     return response
 
 
-def first_width(page, cfg, state: State, widths: list[int]) -> int | None:
-    """The narrowest of `widths` at which the state's trigger is on screen.
+def first_width(page, cfg, state: State, widths: list[int]) -> tuple[int | None, bool]:
+    """The narrowest of `widths` at which the state's trigger is on screen, and whether the
+    page is now freshly loaded at that width, so apply() need not load it again.
 
     A state's width range is a guess from the two discovery widths: a menu found at 1280px
     is tried from 768px up, but its button may only show from 1024px. Starting the state at
     the first width where its button exists keeps it from being skipped altogether.
     """
     if not state.trigger or not widths:
-        return widths[0] if widths else None
+        return (widths[0] if widths else None), False
     try:
         open_page(page, cfg, state.route, widths[0], viewports.height_for(widths[0]))
         for width in widths:
             browser.resize(page, width, viewports.height_for(width), 0)
             if page.evaluate("s => window.__uiAudit.isTriggerVisible(s)", state.trigger):
-                return width
+                # Loaded at a narrower width and resized is not the same as loaded here.
+                return width, width == widths[0]
     except Exception:  # noqa: BLE001 - an unloadable page has no width where the state applies
-        return None
-    return None
+        return None, False
+    return None, False
 
 
-def apply(page, cfg, state: State, width: int, height: int) -> bool:
-    """Load the route at `width` and replay the state. False if not applicable."""
-    open_page(page, cfg, state.route, width, height)
+def apply(page, cfg, state: State, width: int, height: int, loaded: bool = False) -> bool:
+    """Load the route at `width` (unless it is `loaded` there already) and replay the state.
+    False if not applicable."""
+    if not loaded:
+        open_page(page, cfg, state.route, width, height)
     url_before = page.url
     for action in state.actions:
         if not _run_action(page, action):

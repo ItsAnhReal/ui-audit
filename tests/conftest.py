@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-DEMO = Path(__file__).resolve().parent.parent / "demo"
+DEMO = Path(__file__).resolve().parent.parent / "src" / "ui_audit" / "demo"
 
 
 class _QuietHandler(http.server.SimpleHTTPRequestHandler):
