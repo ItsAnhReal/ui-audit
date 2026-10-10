@@ -425,7 +425,6 @@ def cmd_merge(args) -> int:
 
 
 def cmd_verify(args) -> int:
-    from . import report as report_mod
     from . import verify
 
     base_dir, current_dir = Path(args.baseline), Path(args.current)
