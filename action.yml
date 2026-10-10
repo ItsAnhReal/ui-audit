@@ -117,7 +117,7 @@ runs:
         echo "key=$("$PYTHON" -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest()[:16])' "$GITHUB_ACTION_PATH/pyproject.toml")" >> "$GITHUB_OUTPUT"
 
     - if: inputs.comment-file == ''
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ${{ steps.pip.outputs.dir }}
         key: ui-audit-pip-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-version }}-${{ steps.pip.outputs.key }}
@@ -137,7 +137,7 @@ runs:
 
     - id: browsers
       if: inputs.comment-file == ''
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.cache/ms-playwright
         key: ui-audit-chromium-${{ runner.os }}-${{ runner.arch }}-${{ steps.install.outputs.playwright }}
