@@ -4,7 +4,9 @@ One command a CI job runs instead of a script of its own: it starts the app (onc
 the checkout under test and, with `--compare base`, once in a worktree of the base
 commit), audits each, compares them with `verify`, and writes a Markdown summary that
 fits a job summary and a pull request comment. On GitHub Actions it writes the summary
-to the job page, posts or updates one comment on the pull request and sets step outputs.
+to the job page and sets step outputs. `ui-audit ci --post-comment summary.md` posts or
+updates the one pull request comment in a later step, so the token never has to be in
+the environment of a process that runs the pull request's code.
 """
 
 from __future__ import annotations
@@ -28,6 +30,9 @@ from . import verify
 
 MARKER = "<!-- ui-audit-ci -->"
 LIST_LIMIT = 15
+PR_FILE = "pull-request.json"
+COMMENT_LIMIT = 65000  # GitHub refuses comments over 65536 characters
+TOKEN_VARS = ("UI_AUDIT_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN")
 
 
 class CIError(Exception):
@@ -35,6 +40,11 @@ class CIError(Exception):
 
 
 # --- the app under test ------------------------------------------------------
+
+def _child_env() -> dict:
+    """The environment for install, start and the audit, which run the pull request's code."""
+    return {k: v for k, v in os.environ.items() if k not in TOKEN_VARS}
+
 
 def _loopback(host: str) -> bool:
     if host == "localhost" or host.endswith(".localhost"):
@@ -77,7 +87,7 @@ class App:
         group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"  # type: ignore[attr-defined]
                  else {"start_new_session": True})
         self.process = subprocess.Popen(self.command, shell=True, cwd=self.cwd, stdout=log, stderr=subprocess.STDOUT,
-                                        **group)
+                                        **group, env=_child_env())
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if _answers(url):
@@ -124,7 +134,7 @@ class App:
 
 def _run(command: str, cwd: Path, label: str) -> None:
     print(f"::group::{label}" if _on_github() else f"== {label}", flush=True)
-    done = subprocess.run(command, shell=True, cwd=cwd)
+    done = subprocess.run(command, shell=True, cwd=cwd, env=_child_env())
     if _on_github():
         print("::endgroup::", flush=True)
     if done.returncode:
@@ -135,7 +145,7 @@ def _audit(url: str, cwd: Path, output: Path, audit_args: list[str], extra: list
     command = [sys.executable, "-m", "ui_audit", "audit", url, "--no-annotate", "--output", str(output),
                *audit_args, *(extra or [])]
     print(f"::group::ui-audit audit ({cwd})" if _on_github() else f"== ui-audit audit ({cwd})", flush=True)
-    done = subprocess.run(command, cwd=cwd)
+    done = subprocess.run(command, cwd=cwd, env=_child_env())
     if _on_github():
         print("::endgroup::", flush=True)
     return done.returncode
@@ -164,7 +174,9 @@ def audit_checkout(*, cwd: Path, url: str, output: Path, audit_args: list[str], 
 # --- the base commit ---------------------------------------------------------
 
 def _git(*args: str, cwd: Path) -> str:
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
+    # Never prompt for a password: without credentials, a private repository's fetch fails at once.
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True,
+                          env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}).stdout.strip()
 
 
 def base_worktree(cwd: Path, ref: str, into: Path) -> tuple[Path, str]:
@@ -352,6 +364,77 @@ def post_comment(body: str, *, api: str, repo: str, pr: int, token: str) -> str:
     return _api("POST", f"{api}/repos/{repo}/issues/{pr}/comments", token, {"body": body})["html_url"]
 
 
+def _notice(message: str) -> None:
+    print(f"::notice::{message}" if _on_github() else f"note: {message}", file=sys.stderr)
+
+
+def _token() -> str | None:
+    return next((os.environ[name] for name in TOKEN_VARS if os.environ.get(name)), None)
+
+
+def comment(body: str, *, gh: dict, pr: int, token: str | None) -> None:
+    """Post or update the comment; a comment that cannot be posted is a notice, not a failure."""
+    if not token:
+        _notice("no GitHub token, so no pull request comment; the job summary has the result")
+        return
+    if MARKER not in body:
+        body = f"{MARKER}\n{body}"
+    if len(body) > COMMENT_LIMIT:
+        body = body[:COMMENT_LIMIT] + "\n\n… cut; see the job summary for the rest\n"
+    try:
+        print(f"comment: {post_comment(body, api=gh['api'], repo=gh['repo'], pr=pr, token=token)}")
+    except urllib.error.HTTPError as exc:
+        # Pull requests from forks get a read-only token; the job summary still has everything.
+        _notice(f"could not comment on the pull request ({exc.code}): the job needs `pull-requests: write`, and "
+                "pull requests from forks only get a read-only token (see the README for a workflow_run job)")
+    except urllib.error.URLError as exc:
+        _notice(f"could not reach the GitHub API to comment: {exc.reason}")
+
+
+def _pr_of_workflow_run(folder: Path, run_event: dict, gh: dict, token: str) -> int | None:
+    """The pull request an earlier run audited, from its artifact, checked against GitHub.
+
+    The artifact was written by a job that ran the pull request's code, so its number is
+    only trusted when that pull request's head is the commit the earlier run was for.
+    """
+    try:
+        number = int(json.loads((folder / PR_FILE).read_text(encoding="utf-8"))["number"])
+    except (OSError, ValueError, KeyError, TypeError):
+        _notice(f"no {PR_FILE} next to the comment file, so no pull request comment")
+        return None
+    try:
+        head = _api("GET", f"{gh['api']}/repos/{gh['repo']}/pulls/{number}", token)["head"]["sha"]
+    except (urllib.error.URLError, KeyError, TypeError) as exc:
+        _notice(f"could not look up pull request #{number}: {exc}")
+        return None
+    if head != run_event.get("head_sha"):
+        _notice(f"pull request #{number} is not at the audited commit any more, so no comment")
+        return None
+    return number
+
+
+def post(args) -> int:
+    """`ui-audit ci --post-comment FILE`: only the HTTP calls, for a step that never runs the app."""
+    path = Path(args.post_comment)
+    try:
+        body = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"error: cannot read {path}: {exc}", file=sys.stderr)
+        return 2
+    gh, event, token = github_context(), _event(), _token()
+    pr = args.pr or (event.get("pull_request") or {}).get("number")
+    if not pr and event.get("workflow_run") and gh["repo"]:
+        if not token:
+            comment(body, gh=gh, pr=0, token=None)  # says why there is no comment
+            return 0
+        pr = _pr_of_workflow_run(path.parent, event["workflow_run"], gh, token)
+    if not pr or not gh["repo"]:
+        print("not a pull request, so no comment")
+        return 0
+    comment(body, gh=gh, pr=pr, token=token)
+    return 0
+
+
 def _set_outputs(values: dict) -> None:
     path = os.environ.get("GITHUB_OUTPUT")
     if not path:
@@ -373,10 +456,14 @@ def is_blocking(fail_on: str, current: dict | None, comparison: dict | None) -> 
 
 
 def run(args) -> int:
-    # The app's install and start commands run code from the pull request: they must not see the
-    # token that posts the comment. GITHUB_TOKEN is read too, for runs outside the action.
-    tokens = [os.environ.pop(name, None) for name in ("UI_AUDIT_GITHUB_TOKEN", "GITHUB_TOKEN")]
-    token = next((t for t in tokens if t), None)
+    if args.post_comment:
+        return post(args)
+    if not args.url:
+        print("error: ui-audit ci needs the app's url", file=sys.stderr)
+        return 2
+    # Install, start and the audit run code from the pull request; they get an environment without
+    # tokens (_child_env). That is no boundary inside one process tree, so the action posts the
+    # comment from a separate step with --post-comment, and only --comment reads a token here.
     cwd = Path(args.working_directory or ".").resolve()
     out = (cwd / args.output).resolve() if not Path(args.output).is_absolute() else Path(args.output)
     head_dir, base_dir = out / "head", out / "base"
@@ -449,16 +536,11 @@ def run(args) -> int:
     if _on_github() and os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
             handle.write(summary.replace(MARKER + "\n", "") + "\n")
+    if gh["pr"]:
+        # For a later --post-comment, possibly in a workflow_run job that only has the artifact.
+        (out / PR_FILE).write_text(json.dumps({"number": gh["pr"]}) + "\n", encoding="utf-8")
     if args.comment and gh["pr"] and gh["repo"]:
-        if not token:
-            print("warning: no GITHUB_TOKEN, so no pull request comment", file=sys.stderr)
-        else:
-            try:
-                print(f"comment: {post_comment(summary, api=gh['api'], repo=gh['repo'], pr=gh['pr'], token=token)}")
-            except urllib.error.HTTPError as exc:
-                # Pull requests from forks get a read-only token; the job summary still has everything.
-                print(f"warning: could not comment on the pull request ({exc.code}); "
-                      "the job needs `permissions: pull-requests: write`", file=sys.stderr)
+        comment(summary, gh=gh, pr=gh["pr"], token=_token())
 
     counts = report_mod.summary_counts(current["issues"]) if current else {"P1": 0, "P2": 0, "P3": 0}
     _set_outputs({
@@ -475,7 +557,7 @@ def run(args) -> int:
 
 def add_parser(sub) -> None:
     p = sub.add_parser("ci", help="start the app, audit it, compare with the base commit and report (for CI jobs)")
-    p.add_argument("url", help="where the app answers once started, e.g. http://localhost:3000")
+    p.add_argument("url", nargs="?", help="where the app answers once started, e.g. http://localhost:3000")
     p.add_argument("--start", help="shell command that starts the app and keeps running; stopped after each audit")
     p.add_argument("--install", help="shell command run before --start in each checkout, e.g. 'npm ci'")
     p.add_argument("--wait-timeout", type=float, default=180, help="seconds to wait for the app to answer (default 180)")
@@ -492,5 +574,10 @@ def add_parser(sub) -> None:
     p.add_argument("--args", help="extra arguments for `ui-audit audit`, e.g. '--fast --route /'")
     p.add_argument("--output", default=".ui-audit/ci", help="folder for both reports and summary.md (default .ui-audit/ci)")
     p.add_argument("--comment", action="store_true",
-                   help="on a GitHub pull request, post the summary as a comment (updated on later runs)")
+                   help="on a GitHub pull request, also post the summary as a comment from this process; "
+                        "--post-comment in a later step keeps the token away from the app")
+    p.add_argument("--post-comment", metavar="FILE",
+                   help="only post FILE (a summary.md) as the pull request comment, updated on later runs; no audit. "
+                        "Reads the token from UI_AUDIT_GITHUB_TOKEN, GITHUB_TOKEN or GH_TOKEN")
+    p.add_argument("--pr", type=int, help="with --post-comment: the pull request number (default: from the GitHub event)")
     p.set_defaults(func=run)

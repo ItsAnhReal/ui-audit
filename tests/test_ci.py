@@ -2,6 +2,7 @@ import json
 import socket
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -166,7 +167,7 @@ def test_run_reports_an_app_that_never_answers(tmp_path, monkeypatch):
     assert "could not audit" in (tmp_path / "out" / "summary.md").read_text()
 
 
-def test_a_base_that_cannot_be_audited_fails_the_run_and_the_token_stays_out_of_the_app(tmp_path, monkeypatch):
+def test_a_base_that_cannot_be_audited_fails_the_run_and_the_audit_posts_nothing(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "index.html").write_text("x")
@@ -176,10 +177,15 @@ def test_a_base_that_cannot_be_audited_fails_the_run_and_the_token_stays_out_of_
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.setenv("UI_AUDIT_GITHUB_TOKEN", "secret")
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path / "temp"))
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file(tmp_path, {"pull_request": {"number": 5}})))
+    monkeypatch.setattr(ci, "_api", lambda *a, **k: pytest.fail("the audit must not call the GitHub API"))
+
     seen = []
 
     def fake_audit(*, label, output, **_):
-        seen.append(("UI_AUDIT_GITHUB_TOKEN" in ci.os.environ, "GITHUB_TOKEN" in ci.os.environ))
+        env = ci._child_env()  # what install, start and the audit run with
+        seen.append(("UI_AUDIT_GITHUB_TOKEN" in env, "GITHUB_TOKEN" in env))
         if label == "base":
             raise ci.CIError("the start command exited with code 1")
         output.mkdir(parents=True, exist_ok=True)
@@ -193,5 +199,117 @@ def test_a_base_that_cannot_be_audited_fails_the_run_and_the_token_stays_out_of_
                  "--output", str(out)]) == 3
     assert seen == [(False, False), (False, False)]
     assert "The base commit could not be audited" in (out / "summary.md").read_text()
+    assert json.loads((out / "pull-request.json").read_text()) == {"number": 5}  # for a later --post-comment
     assert main(["ci", "http://127.0.0.1:1/", "--start", "x", "--base-ref", "HEAD", "--working-directory", str(repo),
                  "--output", str(out), "--fail-on", "never"]) == 0
+
+
+def test_install_start_and_audit_get_no_token(tmp_path, monkeypatch):
+    for name in ci.TOKEN_VARS:
+        monkeypatch.setenv(name, "secret")
+    dump = f"{sys.executable} -c \"import os, sys; open(sys.argv[1], 'w').write(repr(dict(os.environ)))\""
+    ci._run(f"{dump} install.txt", tmp_path, "install")
+    with pytest.raises(ci.CIError):
+        ci.App(f"{dump} start.txt", tmp_path, tmp_path / "app.log").start(f"http://127.0.0.1:{free_port()}/", timeout=10)
+    for name in ("install.txt", "start.txt"):
+        text = (tmp_path / name).read_text()
+        assert "secret" not in text and "PATH" in text
+    assert ci.os.environ["UI_AUDIT_GITHUB_TOKEN"] == "secret"  # only the children lose it
+
+
+def test_the_comment_step_needs_no_playwright():
+    # The action's comment step runs ui-audit from its source with a bare Python.
+    code = "import sys, ui_audit.cli, ui_audit.ci; ui_audit.cli.build_parser(); print('playwright' in sys.modules)"
+    assert subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                          check=True).stdout.strip() == "False"
+
+
+def event_file(tmp_path, event):
+    path = tmp_path / "event.json"
+    path.write_text(json.dumps(event))
+    return path
+
+
+@pytest.fixture
+def github(tmp_path, monkeypatch):
+    """A GitHub environment for --post-comment; returns the API calls made and lets a test set the event."""
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setenv("GITHUB_API_URL", "https://api")
+    for name in ci.TOKEN_VARS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("UI_AUDIT_GITHUB_TOKEN", "t")
+    calls = []
+    heads = {}
+
+    def api(method, url, token, body=None):
+        calls.append((method, url, body))
+        if "/pulls/" in url:
+            return {"head": {"sha": heads.get(url.rsplit("/", 1)[1])}}
+        return [] if method == "GET" else {"html_url": "u"}
+
+    monkeypatch.setattr(ci, "_api", api)
+    summary = tmp_path / "artifact" / "summary.md"
+    summary.parent.mkdir()
+    summary.write_text(f"{ci.MARKER}\nbody\n")
+
+    return SimpleNamespace(calls=calls, heads=heads, summary=summary, event=lambda event: monkeypatch.setenv(
+        "GITHUB_EVENT_PATH", str(event_file(tmp_path, event))))
+
+
+def test_post_comment_only_posts(github):
+    from ui_audit.cli import main
+
+    github.event({"pull_request": {"number": 3}})
+    assert main(["ci", "--post-comment", str(github.summary)]) == 0
+    assert github.calls[-1] == ("POST", "https://api/repos/o/r/issues/3/comments", {"body": f"{ci.MARKER}\nbody\n"})
+
+
+def test_post_comment_from_a_fork_or_without_a_token_is_a_notice(github, monkeypatch, capsys):
+    from ui_audit.cli import main
+
+    github.event({"pull_request": {"number": 3}})
+
+    def forbidden(method, url, token, body=None):
+        raise ci.urllib.error.HTTPError(url, 403, "Resource not accessible by integration", {}, None)
+
+    monkeypatch.setattr(ci, "_api", forbidden)
+    assert main(["ci", "--post-comment", str(github.summary)]) == 0
+    assert "::notice::could not comment on the pull request (403)" in capsys.readouterr().err
+    monkeypatch.delenv("UI_AUDIT_GITHUB_TOKEN")
+    assert main(["ci", "--post-comment", str(github.summary)]) == 0
+    assert "no GitHub token" in capsys.readouterr().err
+    github.event({})  # a push: nothing to comment on
+    assert main(["ci", "--post-comment", str(github.summary)]) == 0
+
+
+def test_post_comment_in_a_workflow_run_trusts_the_artifact_only_for_the_audited_commit(github):
+    from ui_audit.cli import main
+
+    (github.summary.parent / "pull-request.json").write_text(json.dumps({"number": 9}))
+    github.heads["9"] = "abc"
+    github.event({"workflow_run": {"head_sha": "abc"}})
+    assert main(["ci", "--post-comment", str(github.summary)]) == 0
+    assert github.calls[0][:2] == ("GET", "https://api/repos/o/r/pulls/9")
+    assert github.calls[-1][:2] == ("POST", "https://api/repos/o/r/issues/9/comments")
+
+    github.calls.clear()
+    github.event({"workflow_run": {"head_sha": "other"}})  # the artifact names a pull request it did not audit
+    assert main(["ci", "--post-comment", str(github.summary)]) == 0
+    assert [c[0] for c in github.calls] == ["GET"]
+
+
+def test_the_base_commit_is_fetched_without_credentials(tmp_path):
+    # actions/checkout with persist-credentials: false leaves a shallow clone and a plain origin URL.
+    upstream = tmp_path / "upstream"
+    upstream.mkdir()
+    (upstream / "index.html").write_text("base")
+    git("init", "-q", cwd=upstream)
+    git("add", ".", cwd=upstream)
+    git("commit", "-qm", "base", cwd=upstream)
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=upstream, capture_output=True, text=True).stdout.strip()
+    (upstream / "index.html").write_text("head")
+    git("commit", "-qam", "head", cwd=upstream)
+    git("clone", "-q", "--depth=1", f"file://{upstream}", str(tmp_path / "clone"), cwd=tmp_path)
+    path, sha = ci.base_worktree(tmp_path / "clone", base, tmp_path / "base")
+    assert sha == base and (path / "index.html").read_text() == "base"

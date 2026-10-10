@@ -10,6 +10,8 @@
 - CI tests Python 3.11 to 3.14 on Linux plus macOS and Windows, and runs ruff, mypy and coverage. A test page asserts that state discovery never clicks a destructive-sounding control that looks like a disclosure.
 - `ui-audit demo`: the demo site with planted defects now ships with the package; the command serves it, audits it and opens the report.
 - Installable with `pipx install ui-audit` once 0.1.0 is on PyPI, and the Action gets a `v0` tag that follows every 0.x release.
+- The GitHub Action posts the pull request comment from a separate step after the app has stopped; the step that runs `install`, `start` and the audit no longer gets the token. New `comment-file` input and `ui-audit ci --post-comment` for commenting from a `workflow_run` job, which also works for pull requests from forks. The README recommends `persist-credentials: false` and a `concurrency` group.
+- The action installs only Chromium's system libraries when the browser comes from the cache, and caches pip downloads.
 
 ## 0.1.0 — first public release
 
