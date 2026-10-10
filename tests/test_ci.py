@@ -181,7 +181,11 @@ def test_a_base_that_cannot_be_audited_fails_the_run_and_the_audit_posts_nothing
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file(tmp_path, {"pull_request": {"number": 5}})))
     monkeypatch.setattr(ci, "_api", lambda *a, **k: pytest.fail("the audit must not call the GitHub API"))
 
+    seen = []
+
     def fake_audit(*, label, output, **_):
+        env = ci._child_env()  # what install, start and the audit run with
+        seen.append(("UI_AUDIT_GITHUB_TOKEN" in env, "GITHUB_TOKEN" in env))
         if label == "base":
             raise ci.CIError("the start command exited with code 1")
         output.mkdir(parents=True, exist_ok=True)
