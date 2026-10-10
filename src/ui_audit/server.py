@@ -1,7 +1,8 @@
 """`ui-audit ui`: a local app for starting audits and working through their findings.
 
-It serves one page and a small JSON API on 127.0.0.1. Every API call carries the token that
-is written into the page, and every request must name this server in its Host header, so
+It serves one page and a small JSON API on 127.0.0.1. The page opens only from the address
+printed at start, whose key buys a session cookie; every API call carries the token that is
+written into the page, and every request must name this server in its Host header, so
 another website open in the same browser can neither read reports nor start runs. Audits
 run one at a time, each in its own process (`python -m ui_audit.runner`), always into a new
 folder next to the earlier runs.
@@ -45,6 +46,19 @@ IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
 DEFAULT_PORT = 8484
 PAGE_POLICY = ("default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
                "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+MAX_BODY = 1_000_000
+ENTER_PAGE = (b'<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/">'
+              b'<title>ui-audit</title><p><a href="/">ui-audit</a></p>')
+FORBIDDEN_PAGE = """<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>ui-audit: open the address from the terminal</title>
+<style>body{font:16px/1.5 system-ui,sans-serif;max-width:36rem;margin:3rem auto;padding:0 16px}</style>
+<h1>Open the address printed in the terminal</h1>
+<p>This app only opens from the address that <code>ui-audit ui</code> printed when it started. It ends in
+<code>?k=</code> and a key, so other users on this computer cannot use your app.</p>
+<div lang="de"><h2>Öffne die Adresse aus dem Terminal</h2>
+<p>Diese App öffnet sich nur über die Adresse, die <code>ui-audit ui</code> beim Start ausgegeben hat. Sie endet auf
+<code>?k=</code> und einen Schlüssel, damit andere Benutzer dieses Rechners deine App nicht verwenden können.</p></div>
+</html>""".encode()
 
 
 class ApiError(Exception):
@@ -103,7 +117,7 @@ class Workspace:
 
     def rel(self, path: Path) -> str:
         try:
-            return str(path.resolve().relative_to(self.root))
+            return path.resolve().relative_to(self.root).as_posix()
         except ValueError:
             return str(path.resolve())
 
@@ -561,16 +575,16 @@ class Api:
                 if not ids or not reason or len(reason) > 500:
                     raise ApiError(400, "give the findings and a reason (at most 500 characters)")
                 try:
-                    added, already, path = report_mod.accept(self.workspace.run_dir(name), ids, reason)
+                    added, already, file = report_mod.accept(self.workspace.run_dir(name), ids, reason)
                 except LookupError as exc:
                     raise ApiError(404, str(exc)) from exc
-                return {"added": added, "already": already, "file": self.workspace.rel(path)}
+                return {"added": added, "already": already, "file": self.workspace.rel(file)}
             case "POST", ["runs", name, "unaccept"]:
                 try:
-                    removed, path = report_mod.unaccept(self.workspace.run_dir(name), _strings(body.get("ids"), "ids", 500))
+                    removed, file = report_mod.unaccept(self.workspace.run_dir(name), _strings(body.get("ids"), "ids", 500))
                 except LookupError as exc:
                     raise ApiError(404, str(exc)) from exc
-                return {"removed": removed, "file": self.workspace.rel(path)}
+                return {"removed": removed, "file": self.workspace.rel(file)}
             case "POST", ["runs", name, "delete"]:
                 return self.delete(name)
             case "POST", ["runs", name, "reveal"]:
@@ -747,12 +761,10 @@ class Api:
         path = str(body.get("path") or "/").strip()
         if not re.match(r"^https?://[^\s]+$", base_url) or not path.startswith("/"):
             raise ApiError(400, "give the app address and a page that starts with /")
-        save = ws.runs_dir / "auth.json"
-        if body.get("save"):
-            save = ws.root / str(body["save"])
-        save = save.resolve()
-        if save.suffix != ".json" or not (save.parent == ws.runs_dir or save.parent == ws.root):
-            raise ApiError(400, "sessions are saved as .json in the project folder or next to the runs")
+        name = str(body.get("save") or "auth.json")
+        if not RUN_NAME.match(name) or not name.endswith(".json"):  # a plain file name: never package.json one folder up
+            raise ApiError(400, "sessions are saved as a plain .json file name next to the runs")
+        save = ws.runs_dir / name
         args = ["login", "--base-url", base_url, "--path", path, "--save", str(save)]
         if config_file:
             args += ["--config", str(config_file)]
@@ -798,19 +810,9 @@ class Handler(BaseHTTPRequestHandler):
             if self.headers.get("Host", "") not in self.server.hosts:
                 raise ApiError(403, "unexpected Host header")
             if method == "GET" and url.path in ("/", "/index.html"):
-                # Screenshots load through <img>, which cannot send the token header; a strict
-                # same-site cookie keeps other websites from loading them instead.
-                cookie = f"{self.server.cookie}={self.server.token}; Path=/files/; HttpOnly; SameSite=Strict"
-                return self._send(200, report_mod.page(app={"token": self.server.token, "version": __version__}).encode(),
-                                  "text/html; charset=utf-8", {"Content-Security-Policy": PAGE_POLICY, "Set-Cookie": cookie})
+                return self._page(parse_qs(url.query).get("k", [""])[0])
             if method == "GET" and url.path.startswith("/files/"):
-                jar = SimpleCookie()
-                try:
-                    jar.load(self.headers.get("Cookie", ""))
-                except CookieError:
-                    pass
-                sent = jar[self.server.cookie].value if self.server.cookie in jar else ""
-                if not hmac.compare_digest(sent, self.server.token):
+                if not self._has_session():
                     raise ApiError(403, "open the app first")
                 return self._send_file(url.path[len("/files/"):])
             if url.path.startswith("/api/"):
@@ -828,9 +830,41 @@ class Handler(BaseHTTPRequestHandler):
             traceback.print_exc()
             self._json(500, {"error": f"{exc.__class__.__name__}: {exc}"})
 
+    def _page(self, key: str) -> None:
+        """The page, only for a browser that opened the address printed in the terminal: its
+        key (`?k=`) buys a strict same-site cookie, and the cookie buys the page with the token
+        in it. Another user on this machine knows the port but not the key."""
+        if key:
+            if not hmac.compare_digest(key, self.server.key):
+                return self._send(403, FORBIDDEN_PAGE, "text/html; charset=utf-8", {"Content-Security-Policy": PAGE_POLICY})
+            # Screenshots load through <img>, which cannot send the token header, so the cookie
+            # carries the token too. The page then reloads itself without the key: a same-origin
+            # navigation, so the strict cookie is sent even when the link was opened from elsewhere.
+            cookie = f"{self.server.cookie}={self.server.token}; Path=/; HttpOnly; SameSite=Strict"
+            return self._send(200, ENTER_PAGE, "text/html; charset=utf-8",
+                              {"Content-Security-Policy": PAGE_POLICY, "Set-Cookie": cookie})
+        if not self._has_session():
+            return self._send(403, FORBIDDEN_PAGE, "text/html; charset=utf-8", {"Content-Security-Policy": PAGE_POLICY})
+        return self._send(200, report_mod.page(app={"token": self.server.token, "version": __version__}).encode(),
+                          "text/html; charset=utf-8", {"Content-Security-Policy": PAGE_POLICY})
+
+    def _has_session(self) -> bool:
+        jar = SimpleCookie()
+        try:
+            jar.load(self.headers.get("Cookie", ""))
+        except CookieError:
+            pass
+        sent = jar[self.server.cookie].value if self.server.cookie in jar else ""
+        return hmac.compare_digest(sent, self.server.token)
+
     def _body(self) -> dict:
-        length = int(self.headers.get("Content-Length") or 0)
-        if length > 1_000_000:
+        try:
+            length = max(0, int(self.headers.get("Content-Length") or 0))
+        except ValueError:
+            length = 0
+            self.close_connection = True  # unknown body length: do not read the rest as the next request
+        if length > MAX_BODY:
+            self.close_connection = True
             raise ApiError(413, "request too large")
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
@@ -887,6 +921,7 @@ class AppServer(ThreadingHTTPServer):
         self.port = self.server_address[1]
         self.hosts = {f"127.0.0.1:{self.port}", f"localhost:{self.port}"}
         self.token = secrets.token_urlsafe(24)
+        self.key = secrets.token_urlsafe(24)  # in the printed address; valid while the server runs
         self.cookie = f"ui-audit-{self.port}"
         self.api = Api(workspace)
 
@@ -894,16 +929,22 @@ class AppServer(ThreadingHTTPServer):
     def url(self) -> str:
         return f"http://127.0.0.1:{self.port}/"
 
+    @property
+    def launch_url(self) -> str:
+        """The address to open: it carries the key that lets this browser in."""
+        return f"{self.url}?k={self.key}"
+
 
 def serve(workspace: Workspace, port: int = DEFAULT_PORT, open_browser: bool = True) -> None:
     server = AppServer(workspace, port)
-    print(f"ui-audit is running at {server.url}")
+    print(f"ui-audit is running at {server.launch_url}")
+    print("open this address (with its key) to use the app; without the key the page is refused")
     print(f"runs: {workspace.runs_dir}")
     print("press Ctrl+C to stop")
     if open_browser:
         import webbrowser
 
-        threading.Timer(0.4, webbrowser.open, (server.url,)).start()
+        threading.Timer(0.4, webbrowser.open, (server.launch_url,)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

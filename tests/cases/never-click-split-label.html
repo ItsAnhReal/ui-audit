@@ -1,0 +1,33 @@
+<!-- expect: clean -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>case</title><style>
+body { margin: 0; padding: 24px; font: 16px/1.5 sans-serif; }
+button { height: 56px; margin: 0 8px 8px 0; }
+.marker { width: 3000px; height: 20px; background: red; }
+</style></head><body>
+<!-- A destructive name broken over two lines, as narrow buttons are: its words are still "log out".
+     A click requests "clicked" and leaves a 3000px bar that outlives reloads. "More" is the one safe disclosure. -->
+<button aria-expanded="false" aria-controls="more">More</button>
+<div id="more" hidden><p>More details.</p></div>
+<button class="unsafe" aria-haspopup="menu">Log<br>out</button>
+<script>
+function mark(name) {
+  document.title = "clicked: " + name;
+  const bar = document.createElement("div");
+  bar.className = "marker";
+  document.body.append(bar);
+}
+try { if (localStorage.getItem("clicked")) mark(localStorage.getItem("clicked")); } catch (e) { /* no storage */ }
+document.querySelector("[aria-controls=more]").addEventListener("click", (e) => {
+  const open = e.currentTarget.getAttribute("aria-expanded") === "true";
+  e.currentTarget.setAttribute("aria-expanded", String(!open));
+  document.getElementById("more").hidden = open;
+});
+for (const el of document.querySelectorAll(".unsafe")) {
+  el.addEventListener("click", () => {
+    try { localStorage.setItem("clicked", el.textContent); } catch (e) { /* no storage */ }
+    fetch("clicked?" + encodeURIComponent(el.textContent)).catch(() => {});
+    mark(el.textContent);
+  });
+}
+</script>
+</body></html>

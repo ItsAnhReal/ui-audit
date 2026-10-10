@@ -100,7 +100,7 @@ def pixel_diffs(baseline: dict, current: dict, base_dir: Path, current_dir: Path
             diff_dir.mkdir(parents=True, exist_ok=True)
             name = Path(capture["file"]).name
             diff.save(diff_dir / name)
-            entry["diff"] = str((diff_dir / name).relative_to(out_dir))
+            entry["diff"] = (diff_dir / name).relative_to(out_dir).as_posix()
         results.append(entry)
     return results
 

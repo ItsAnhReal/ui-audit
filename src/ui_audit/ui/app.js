@@ -444,7 +444,8 @@
     const box = document.getElementById("toasts");
     const top = [...document.querySelectorAll("dialog[open]")].pop();
     if (box.parentElement !== (top || document.body)) (top || document.body).append(box);  // a modal dialog covers the page
-    box.append(node);
+    // errors are announced at once (role=alert), everything else politely (role=status)
+    box.querySelector(kind === "bad" ? "#toasts-alert" : "#toasts-status").append(node);
     if (ms) setTimeout(() => node.remove(), action ? ms * 1.6 : ms);
     return node;
   }
@@ -464,7 +465,7 @@
       if (item === "sep") { node.append(h("div", { class: "sep", role: "separator" })); continue; }
       if (item.head) { node.append(h("div", { class: "head", text: item.head })); continue; }
       if (item.node) { node.append(item.node); continue; }
-      node.append(h("button", { role: item.checked === undefined ? "menuitem" : "menuitemradio", class: item.danger ? "danger" : null,
+      node.append(h("button", { role: item.checked === undefined ? "menuitem" : item.toggle ? "menuitemcheckbox" : "menuitemradio", class: item.danger ? "danger" : null,
         "aria-checked": item.checked === undefined ? null : String(!!item.checked), disabled: item.disabled,
         onClick: () => { closeMenu(); item.run(); } }, item.icon ? icon(item.icon) : null, item.label));
     }
@@ -491,8 +492,14 @@
   document.addEventListener("pointerdown", (event) => { if (openMenuNode && !openMenuNode.contains(event.target)) closeMenu(); }, true);
   window.addEventListener("resize", closeMenu);
 
-  function modal(content, { onClose, cls = "modal" } = {}) {
+  let modalCount = 0;
+  function modal(content, { onClose, cls = "modal", label } = {}) {
     const dialog = h("dialog", { class: cls }, content);
+    const title = dialog.querySelector("h1, h2, h3");
+    if (title) {  // screen readers name the dialog after its title
+      title.id = title.id || `modal-title-${++modalCount}`;
+      dialog.setAttribute("aria-labelledby", title.id);
+    } else if (label) dialog.setAttribute("aria-label", label);
     document.body.append(dialog);
     dialog.addEventListener("close", () => {
       const toasts = document.getElementById("toasts");
@@ -527,7 +534,7 @@
     const open = h("a", { class: "btn sm", target: "_blank", rel: "noopener" }, icon("external"), t("lightbox.open"));
     const dialog = modal(h("div", { class: "lb" },
       h("header", {}, prev, next, cap, open, h("button", { class: "btn sm", onClick: () => dialog.close() }, icon("x"), t("action.close"))),
-      h("div", { class: "frame" }, stage)), { cls: "lightbox" });
+      h("div", { class: "frame" }, stage)), { cls: "lightbox", label: t("lightbox.title") });
     function show() {
       const item = items[at];
       img.src = item.src;
@@ -621,8 +628,13 @@
       "sep",
       { head: t("settings.editor") },
       ...["vscode", "cursor", "windsurf", "zed", "copy"].map((editor) => ({ label: t(`editor.${editor}`), checked: prefs.get("editor", "vscode") === editor, run: pick("editor", editor, rerender) })),
+      "sep",
+      { head: t("settings.keyboard") },
+      { label: t("settings.singleKeys"), toggle: true, checked: singleKeys(), run: pick("single-keys", singleKeys() ? "off" : "on", rerender) },
     ]);
   }
+  // j, k and / act without a modifier; speech input can trigger them by accident (WCAG 2.1.4), so they can be turned off
+  function singleKeys() { return prefs.get("single-keys", "on") !== "off"; }
   function updateJobPill() {
     const pill = document.getElementById("job-pill");
     if (!pill || !S.state) return;
@@ -1051,19 +1063,18 @@
     }
     function cli() {
       const b = body();
-      const quote = (s) => (/^[\w./:@%+=,-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`);
       const parts = ["ui-audit audit"];
-      if (b.config) parts.push(`--config ${quote(b.config)}`);
-      if (b.base_url && b.base_url !== configInfo().base_url) parts.push(`--base-url ${quote(b.base_url)}`);
+      if (b.config) parts.push(`--config ${shellQuote(b.config)}`);
+      if (b.base_url && b.base_url !== configInfo().base_url) parts.push(`--base-url ${shellQuote(b.base_url)}`);
       if (b.mode === "quick") parts.push("--fast");
-      for (const r of b.routes || []) parts.push(`--route ${quote(r)}`);
+      for (const r of b.routes || []) parts.push(`--route ${shellQuote(r)}`);
       if (b.widths && b.widths.length) parts.push(`--width ${b.widths.join(",")}`);
-      if (b.storage_state) parts.push(`--storage-state ${quote(b.storage_state)}`);
-      if (b.locale) parts.push(`--locale ${quote(b.locale)}`);
+      if (b.storage_state) parts.push(`--storage-state ${shellQuote(b.storage_state)}`);
+      if (b.locale) parts.push(`--locale ${shellQuote(b.locale)}`);
       if (!b.states) parts.push("--no-states");
       if (!b.annotate) parts.push("--no-annotate");
-      if (b.changed_since) parts.push(`--changed-since ${quote(b.changed_since)}`);
-      if (b.name) parts.push(`--output ${quote(S.state.runs_dir + "/" + b.name)}`);
+      if (b.changed_since) parts.push(`--changed-since ${shellQuote(b.changed_since)}`);
+      if (b.name) parts.push(`--output ${shellQuote(S.state.runs_dir + "/" + b.name)}`);
       return parts.join(" \\\n  ");
     }
     function sync() {
@@ -1314,7 +1325,7 @@
         list,
         h("div", { class: "shortcuts" }, h("span", {}, h("span", { class: "kbd", text: "↑" }), h("span", { class: "kbd", text: "↓" }), " ", t("keys.move")),
           h("span", {}, h("span", { class: "kbd", text: "←" }), h("span", { class: "kbd", text: "→" }), " ", t("keys.widths")),
-          h("span", {}, h("span", { class: "kbd", text: "/" }), " ", t("keys.search")))),
+          singleKeys() ? h("span", {}, h("span", { class: "kbd", text: "/" }), " ", t("keys.search")) : null)),
       detail);
     body.replaceChildren(split);
     const fitHeight = () => { split.style.setProperty("--split-top", `${Math.max(140, split.getBoundingClientRect().top + window.scrollY) + 24}px`); };
@@ -1503,10 +1514,11 @@
     const onKey = (event) => {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || document.querySelector("dialog[open]")) return;
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "");
-      if (event.key === "/" && !typing) { event.preventDefault(); search.focus(); search.select(); return; }
+      const letters = singleKeys();
+      if (event.key === "/" && !typing && letters) { event.preventDefault(); search.focus(); search.select(); return; }
       if (typing) { if (event.key === "Escape") document.activeElement.blur(); return; }
-      if (event.key === "ArrowDown" || event.key === "j") { event.preventDefault(); step(1); }
-      else if (event.key === "ArrowUp" || event.key === "k") { event.preventDefault(); step(-1); }
+      if (event.key === "ArrowDown" || (letters && event.key === "j")) { event.preventDefault(); step(1); }
+      else if (event.key === "ArrowUp" || (letters && event.key === "k")) { event.preventDefault(); step(-1); }
       else if (event.key === "ArrowRight" || event.key === "ArrowLeft") { const pick = detail.querySelector(".widths"); if (pick) { event.preventDefault(); pick.dispatchEvent(new CustomEvent("step", { detail: event.key === "ArrowRight" ? 1 : -1 })); } }
       else if (event.key === "Escape" && route.f) { route.f = null; history.replaceState(null, "", link({ view: "run", run: route.run })); drawList(); drawDetail(); }
     };
@@ -1710,7 +1722,7 @@
       else actions.append(h("button", { class: "btn", "aria-expanded": String(vs.accepting === item.key), onClick: () => { vs.accepting = vs.accepting === item.key ? null : item.key; hooks.redraw(); } }, icon("checkCircle"), t("detail.accept")));
     } else {
       actions.append(h("button", { class: "btn", onClick: () => copy(recheckCommand(model, all), t("toast.commandCopied")) }, icon("recheck"), t("detail.copyRecheck")));
-      if (!first.accepted) actions.append(h("button", { class: "btn", onClick: () => copy(`ui-audit accept ${runDir(model)} ${groupId || issue.id} --reason "why this is fine"`, t("toast.commandCopied")) }, icon("checkCircle"), t("detail.copyAccept")));
+      if (!first.accepted) actions.append(h("button", { class: "btn", onClick: () => copy(`ui-audit accept ${shellQuote(runDir(model).replace(/\/$/, ""))} ${shellQuote(groupId || issue.id)} --reason "why this is fine"`, t("toast.commandCopied")) }, icon("checkCircle"), t("detail.copyAccept")));
     }
     node.append(actions);
     if (IS_APP && vs.accepting === item.key && !first.accepted) node.append(acceptForm(model, item, groupId || issue.id, vs, hooks));
@@ -1727,7 +1739,7 @@
     // where it is
     const facts = h("dl", { class: "facts" });
     const fact = (label, ...value) => facts.append(h("dt", { text: label }), h("dd", {}, value));
-    const pageUrl = model.data.base_url ? model.data.base_url.replace(/\/$/, "") + issue.route : null;
+    const pageUrl = /^https?:\/\//i.test(model.data.base_url || "") ? model.data.base_url.replace(/\/$/, "") + issue.route : null;  // never javascript: from a report
     fact(t("detail.page"), h("span", { class: "mono", text: issue.route }), pageUrl && !/[[\]]/.test(issue.route) ? [" ", h("a", { href: pageUrl, target: "_blank", rel: "noopener", title: pageUrl, "aria-label": t("detail.openPage") }, icon("external"))] : null);
     fact(t("detail.state"), stateLabel(model, issue.route, issue.state),
       (issue.also_in_states || []).length ? h("div", { class: "muted", text: t("detail.alsoIn", { states: issue.also_in_states.map((s) => stateLabel(model, issue.route, s)).join(", ") }) }) : null);
@@ -1946,14 +1958,15 @@
     if (kept.length > limit) { const step = kept.length / limit; kept = Array.from({ length: limit }, (_, n) => kept[Math.floor(n * step)]); }
     return kept;
   }
+  // one word for a POSIX shell: plain when safe, otherwise single-quoted
+  function shellQuote(v) { return /^[\w./:@%+=,-]+$/.test(v) ? v : `'${v.replace(/'/g, "'\\''")}'`; }
   function recheckCommand(model, issues) {
     const dir = runDir(model).replace(/\/$/, "");
     const out = `${dir}-recheck`;
-    const quote = (v) => (/^[\w./:@%+=,-]+$/.test(v) ? v : `'${v.replace(/'/g, "'\\''")}'`);
-    const routes = [...new Set(issues.map((i) => i.route))].map((r) => `--route ${quote(r)}`).join(" ");
+    const routes = [...new Set(issues.map((i) => i.route))].map((r) => `--route ${shellQuote(r)}`).join(" ");
     const widths = recheckWidths(issues, model.LO, model.HI).join(",");
     const states = issues.every((i) => i.state === "default") ? " --no-states" : "";
-    return `ui-audit audit --like ${quote(dir)} ${routes} --width ${widths}${states} --output ${quote(out)}\nui-audit verify ${quote(dir)} ${quote(out)}`;
+    return `ui-audit audit --like ${shellQuote(dir)} ${routes} --width ${widths}${states} --output ${shellQuote(out)}\nui-audit verify ${shellQuote(dir)} ${shellQuote(out)}`;
   }
   function fixPrompt(model, item, issue) {
     const all = item.all || item.issues;

@@ -1,6 +1,6 @@
 # Demo app — planted defects
 
-A three-page static site used by the end-to-end tests. Every defect is deliberate.
+A three-page static site used by the end-to-end tests and by `ui-audit demo`, which serves it and audits it. Every defect is deliberate.
 
 | Route | State | Widths | Defect | Check |
 |---|---|---|---|---|
