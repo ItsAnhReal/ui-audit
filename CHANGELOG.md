@@ -16,6 +16,8 @@
 - App and report: a visible keyboard focus outline everywhere (also in forced-colors mode), named dialogs, errors announced as alerts, a setting to turn off the single-key shortcuts `j`, `k` and `/`, no "open page" link for addresses that are not http(s), and a quoted path in the copied `accept` command.
 - Route discovery: apps under a sub-path (`base_url = "http://host/app/"`) get routes relative to it instead of `/app/app/…`; hash-router pages (`/#/settings`) and Remix / React Router flat routes in `app/routes` are found; sitemaps listing the production host, sitemap indexes and `Sitemap:` lines in `robots.txt` are read.
 - Safer automatic clicks: the consent banner's decline button is only clicked inside a dialog or a fixed or floating box about cookies, and unsafe words (now also reset, archive, save, approve, reject, transfer, refund, … and German equivalents) match whole words, so "order" no longer stops "Border options". Custom `unsafe_words` match whole words too.
+- For agents: `audit --json` and `verify --json` print a compact summary (a few KB instead of the whole report.json), and `ui-audit show <run> [--group ID | --issue ID]` lists causes or one cause in full with its re-check command. `ui-audit mcp` serves `audit`, `verify`, `list_findings`, `get_screenshot` and `accept` to MCP clients (Claude Desktop, Cursor).
+- The skill covers `--fast`, `--like`, `--changed-since`, `accept`, groups and exit codes, and makes the screenshot review optional; `install-skill --target agents` writes `.agents/skills/ui-audit`, and `init` suggests lines for `AGENTS.md`.
 
 ## 0.1.0 — first public release
 

@@ -86,9 +86,29 @@ On 3, `report.json` is still written, but 0 findings in it do not mean the app i
 ```bash
 ui-audit install-skill                 # .claude/skills/ui-audit and .codex/skills/ui-audit in this project
 ui-audit install-skill --scope user    # ~/.claude/skills and ~/.codex/skills
+ui-audit install-skill --target agents # .agents/skills/ui-audit, read by Cursor, Gemini CLI, OpenCode and others (--target all: every one)
 ```
 
-The skill (`src/ui_audit/skill/SKILL.md`) tells the agent how to run the loop: baseline, semantic review, triage, patch, targeted rerun, verify, full regression, and when to stop.
+The skill (`src/ui_audit/skill/SKILL.md`) tells the agent how to run the loop: start the app, baseline, read the groups, triage (accept what is intentional), patch, targeted rerun, verify, full regression, and when to stop. `ui-audit init` also prints three lines to paste into `AGENTS.md` for agents without skills.
+
+`report.json` is large (about 25k tokens for the three demo pages), so agents read compact views instead:
+
+```bash
+ui-audit audit <url> --json                       # summary on stdout, logs on stderr: counts, causes with one example each, pages to check by hand, errors
+ui-audit show .ui-audit/latest [--json]           # the same summary for an existing run
+ui-audit show .ui-audit/latest --group <id>       # one cause in full: every finding, widths, evidence, source candidates, screenshots, re-check command
+ui-audit verify <baseline> <current> --json       # fixed, introduced, persistent, out of scope
+```
+
+### MCP
+
+`ui-audit mcp` serves the same tools over the Model Context Protocol (stdio), for clients without skills such as Claude Desktop, Cursor and Windsurf: `audit`, `verify`, `list_findings` (paged causes, or the findings of one), `get_screenshot` (the PNG of a finding) and `accept`. Add it to the client's MCP settings (`claude_desktop_config.json`, `.cursor/mcp.json`):
+
+```json
+{"mcpServers": {"ui-audit": {"command": "ui-audit", "args": ["mcp"]}}}
+```
+
+The server runs in the folder the client starts it in, so relative paths and `ui-audit.toml` resolve from there; pass absolute run directories if unsure.
 
 ## The app
 
