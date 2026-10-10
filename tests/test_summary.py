@@ -1,4 +1,5 @@
 import json
+import shlex
 
 from agent_fixtures import make_run
 
@@ -44,9 +45,10 @@ def test_detail_lists_every_finding_with_sources_and_commands(tmp_path):
     assert d["issues"][0]["source_candidates"][0] == {"file": "src/Card.tsx", "line": 12, "reasons": ["runtime source"]}
     assert d["issues"][0]["evidence"] == [str(run / "shots/pricing__default__390__annotated.png")]
     # The viewer's re-check: edges, one pixel outside, the middle; default state only so no state discovery.
-    assert d["recheck"] == (f"ui-audit audit --like {run} --route /pricing --route / --width 320,360,361,390,480,481 "
-                            f"--no-states --output {run}-recheck\nui-audit verify {run} {run}-recheck")
-    assert d["accept"].startswith(f"ui-audit accept {run} {group} ")
+    q, qr = shlex.quote(str(run)), shlex.quote(f"{run}-recheck")  # Windows paths get quoted
+    assert d["recheck"] == (f"ui-audit audit --like {q} --route /pricing --route / --width 320,360,361,390,480,481 "
+                            f"--no-states --output {qr}\nui-audit verify {q} {qr}")
+    assert d["accept"].startswith(f"ui-audit accept {q} {group} ")
     issue = summary.detail(data, run, d["issues"][1]["id"])
     assert issue["kind"] == "issue" and issue["count"] == 1
     paged = summary.detail(data, run, group, offset=1, limit=1)
