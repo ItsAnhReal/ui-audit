@@ -65,7 +65,7 @@ def test_app_runs_an_audit_and_accepts_a_finding(demo_site, tmp_path):
     project = tmp_path / "shop"
     project.mkdir()
     (project / "ui-audit.toml").write_text(
-        f'base_url = "{url}"\nproject_root = "{site}"\noutput = ".ui-audit/latest"\nsettle_ms = 50\n'
+        f'base_url = "{url}"\nproject_root = "{site.as_posix()}"\noutput = ".ui-audit/latest"\nsettle_ms = 50\n'
         '[routes]\ndiscover = ["config"]\ninclude = ["/pricing.html"]\n')
     server = AppServer(Workspace(project, project / "ui-audit.toml"), 0)
     threading.Thread(target=server.serve_forever, daemon=True).start()

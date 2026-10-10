@@ -62,7 +62,7 @@ class SourceIndex:
 
     def relative(self, path: str) -> str:
         try:
-            return str(Path(path).resolve().relative_to(self.root.resolve()))
+            return Path(path).resolve().relative_to(self.root.resolve()).as_posix()
         except (ValueError, OSError):
             return path
 

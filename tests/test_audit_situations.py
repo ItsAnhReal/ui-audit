@@ -98,7 +98,9 @@ def test_a_feed_is_skipped_and_a_progress_meter_is_content(demo_site, tmp_path):
     url, site = demo_site
     report = run(site, url, tmp_path, {"rss.xml": FEED, "meters.html": METERS}, [390])
     routes = {r["path"]: r for r in report["routes"]}
-    assert routes["/rss.xml"]["status"] == "skipped: not a web page (application/xml)"
+    # The test server takes the type from the platform's registry: application/xml, text/xml on Windows.
+    assert routes["/rss.xml"]["status"] in ("skipped: not a web page (application/xml)",
+                                            "skipped: not a web page (text/xml)")
     assert routes["/meters.html"]["content"]["state"] == "ok"
     assert not [i for i in report["issues"] if i["route"] == "/rss.xml"]
 
