@@ -4,6 +4,10 @@
 
 - One set of exit codes for every command: 0 ok, 1 findings over the threshold, 2 usage or input error, 3 the app or the audit failed. `audit --fail-on` now exits 1 (was 2), `ui-audit ci` exits 3 when it could not audit (was 2), `init` over an existing file and invalid agent findings exit 2, and a missing or broken `report.json` is a one-line error instead of a traceback.
 - `audit` no longer reports an unreachable app as 0 findings: a route that did not load, a run that measured no route, or most routes ending on one sign-in page (an expired `storage_state`) is an `error:` line and exit 3. `doctor` says which copy of the skill each agent reads, and `--help` shows the four-step loop.
+- `ui-audit ci` starts and stops the app on Windows too (the whole process tree ends with `taskkill /T`).
+- On Windows, file paths in `report.json`, the report and the app (source candidates, screenshots, settings and session files) use forward slashes like everywhere else.
+- `ui-audit ci` asks an app on localhost directly whether it is up, never through a proxy from the environment or the macOS system settings.
+- CI tests Python 3.11 to 3.14 on Linux plus macOS and Windows, and runs ruff, mypy and coverage. A test page asserts that state discovery never clicks a destructive-sounding control that looks like a disclosure.
 
 ## 0.1.0 — first public release
 

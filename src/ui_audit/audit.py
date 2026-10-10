@@ -292,7 +292,8 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     results: dict[int, dict] = {}
                     not_applicable: set[int] = set()
 
-                    def probe(width: int, _state=state, _results=results, _na=not_applicable) -> frozenset[str]:
+                    def probe(width: int, _path=path, _state=state, _results=results,
+                              _na=not_applicable) -> frozenset[str]:
                         nonlocal probe_count
                         browser.resize(page, width, viewports.height_for(width), min(cfg.settle_ms, SWEEP_SETTLE_MS))
                         probe_count += 1
@@ -302,7 +303,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                         result = page.evaluate("o => window.__uiAudit.probe(o)", opts)
                         _results[width] = result
                         for raw in result["issues"]:
-                            issue_set.observe(raw, path, _state.id, width, engine)
+                            issue_set.observe(raw, _path, _state.id, width, engine)
                         return sweep_signature(result)
 
                     try:
@@ -428,7 +429,7 @@ def _capture(page, cfg: Config, shots_dir: Path, out_dir: Path, path: str, state
     found = results.get(width, {}).get("issues", [])
     capture = {
         "route": path, "state": state.id, "width": width, "height": height, "browser": engine, "reasons": plan.reasons,
-        "file": str(clean.relative_to(out_dir)), "issue_count": len(found),
+        "file": clean.relative_to(out_dir).as_posix(), "issue_count": len(found),
     }
     if cfg.annotate and found:
         items = [{"selector": i["selector"], "severity": i["severity"], "check": i["check"], "index": n}
@@ -437,5 +438,5 @@ def _capture(page, cfg: Config, shots_dir: Path, out_dir: Path, path: str, state
         annotated = shots_dir / f"{base}__annotated.png"
         page.screenshot(path=str(annotated), full_page=True, clip=clip)
         page.evaluate("() => window.__uiAudit.clearAnnotations()")
-        capture["annotated"] = str(annotated.relative_to(out_dir))
+        capture["annotated"] = annotated.relative_to(out_dir).as_posix()
     return capture

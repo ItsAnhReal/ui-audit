@@ -1,5 +1,7 @@
 """End-to-end runs against the deliberately broken demo app (see demo/README.md)."""
 
+import os
+
 import pytest
 
 from ui_audit import audit, verify
@@ -192,7 +194,8 @@ def test_saved_session_is_reused_by_the_audit(demo_site, tmp_path):
     cfg = config(url, site, tmp_path / "run", routes={"include": ["/pricing.html"]}, states={"auto": False},
                  viewports={"widths": [390]})
     saved = browser.save_session(cfg, tmp_path / "auth" / "session.json", "/", wait=lambda: None, headless=True)
-    assert saved.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":  # Windows has no POSIX file modes
+        assert saved.stat().st_mode & 0o777 == 0o600
     cfg.storage_state = str(saved)
     assert audit.run(cfg, log=lambda _: None)["coverage"]["/pricing.html|default"] == [390]
 

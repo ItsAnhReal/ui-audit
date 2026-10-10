@@ -212,7 +212,8 @@ def cmd_login(args) -> int:
         print("\ncancelled; nothing saved", file=sys.stderr)
         return 1
     print(f"saved the signed-in session to {target}")
-    print(f'Use it with `storage_state = "{target}"` in ui-audit.toml or `ui-audit audit --storage-state {target}`.')
+    # Forward slashes keep the TOML snippet valid on Windows, where "\U..." would be an escape.
+    print(f'Use it with `storage_state = "{target.as_posix()}"` in ui-audit.toml or `ui-audit audit --storage-state {target}`.')
     print("The file works like a password for that account: keep it out of version control.")
     return 0
 
@@ -424,7 +425,6 @@ def cmd_merge(args) -> int:
 
 
 def cmd_verify(args) -> int:
-    from . import report as report_mod
     from . import verify
 
     base_dir, current_dir = Path(args.baseline), Path(args.current)

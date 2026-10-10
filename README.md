@@ -269,6 +269,8 @@ ui-audit audit http://localhost:8765 --project-root demo
 pip install -e ".[dev]"
 pytest                 # unit tests + end-to-end tests against the demo (a few minutes)
 pytest -m "not e2e"    # unit tests only
+pytest -n auto         # in parallel
+ruff check . && mypy   # lint and type check, as CI runs them
 ```
 
 Guidance for contributors and coding agents is in [`CLAUDE.md`](CLAUDE.md). A finding that is not a defect gets the smallest page reproducing it in `tests/cases/` before the check changes; bug reports with such a page are the most useful kind.
