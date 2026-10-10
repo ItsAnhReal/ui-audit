@@ -10,6 +10,8 @@ from importlib import resources
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
+from . import routes
+
 PROBE_JS = resources.files("ui_audit").joinpath("probe.js").read_text(encoding="utf-8")
 
 
@@ -140,13 +142,19 @@ def save_session(cfg, target: Path, path: str, wait, headless: bool = False) -> 
 
 
 def url_for(base_url: str, path: str) -> str:
-    return urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
+    """The URL of a route. Routes are relative to the base URL's path: /x under http://h/app/ is
+    http://h/app/x, and a hash route /#/settings is http://h/app/#/settings."""
+    # "./" keeps a first segment with a colon (/a:b) from reading as a URL scheme.
+    return urljoin(base_url.rstrip("/") + "/", "./" + path.lstrip("/"))
 
 
 def load(page, base_url: str, path: str, width: int, height: int, settle_ms: int):
     """Open a route and return the main document's response (None if there was none)."""
     page.set_viewport_size({"width": width, "height": height})
-    response = page.goto(url_for(base_url, path), wait_until="load", timeout=30000)
+    url = url_for(base_url, path)
+    if routes.same_document(page.url, url):
+        page.goto("about:blank")  # changing only the fragment does not reload; a hash route starts fresh
+    response = page.goto(url, wait_until="load", timeout=30000)
     try:
         page.wait_for_load_state("networkidle", timeout=5000)
     except Exception:  # noqa: BLE001 - long-polling apps never go idle
