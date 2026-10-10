@@ -12,6 +12,8 @@
 - Installable with `pipx install ui-audit` once 0.1.0 is on PyPI, and the Action gets a `v0` tag that follows every 0.x release.
 - The GitHub Action posts the pull request comment from a separate step after the app has stopped; the step that runs `install`, `start` and the audit no longer gets the token. New `comment-file` input and `ui-audit ci --post-comment` for commenting from a `workflow_run` job, which also works for pull requests from forks. The README recommends `persist-credentials: false` and a `concurrency` group.
 - The action installs only Chromium's system libraries when the browser comes from the cache, and caches pip downloads.
+- `ui-audit ui` opens only from the address it prints at start (`http://127.0.0.1:8484/?k=…`, like Jupyter); without the key the page answers 403, so other users on the same machine cannot use the app. Sessions from the app's login are saved only as plain file names next to the runs.
+- App and report: a visible keyboard focus outline everywhere (also in forced-colors mode), named dialogs, errors announced as alerts, a setting to turn off the single-key shortcuts `j`, `k` and `/`, no "open page" link for addresses that are not http(s), and a quoted path in the copied `accept` command.
 
 ## 0.1.0 — first public release
 

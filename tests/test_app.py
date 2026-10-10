@@ -75,7 +75,7 @@ def test_app_runs_an_audit_and_accepts_a_finding(demo_site, tmp_path):
             browser = launch(playwright)
             page = browser.new_page(locale="en-US", viewport={"width": 1280, "height": 900})
             page.on("pageerror", lambda exc: errors.append(str(exc)))
-            page.goto(server.url)
+            page.goto(server.launch_url)
             page.get_by_role("button", name="Start the first audit").click()
             page.get_by_role("button", name="Some pages").click()
             page.locator("#na-routes").fill("/pricing.html")
@@ -167,3 +167,111 @@ def test_cancelling_an_audit_stops_it_and_keeps_nothing(demo_site, tmp_path):
         server.server_close()
     assert state["jobs"][0]["status"] == "cancelled"
     assert state["runs"] == [] and not (project / ".ui-audit" / job["name"]).exists()
+
+
+PNG_1PX = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+                        "1f15c4890000000d49444154789c6360f8cfc0f01f0005000201e2c4c0d10000000049454e44ae426082")
+
+
+def small_run(folder, base_url, project):
+    """A finished run with one finding and one screenshot, written as `ui-audit audit` would."""
+    (folder / "shots").mkdir(parents=True)
+    (folder / "shots" / "home__default__390.png").write_bytes(PNG_1PX)
+    issue = {"id": "i1", "signature": "text-spill|/|default|p", "check": "text-spill", "severity": "P2", "origin": "deterministic",
+             "route": "/", "state": "default", "selector": "p", "message": "text spills", "widths": [390], "evidence": [], "rects": {}}
+    data = {"version": "0.1.0", "created": "2026-01-01T00:00:00+00:00", "base_url": base_url, "project_root": str(project),
+            "output_dir": str(folder), "routes": [{"path": "/", "discovered_by": ["config"], "loaded": True, "status": "audited"}],
+            "states": [], "breakpoints": [], "errors": [], "stats": {"issues": report.summary_counts([issue]), "seconds": 1},
+            "captures": [{"route": "/", "state": "default", "width": 390, "file": "shots/home__default__390.png", "reasons": ["standard"]}],
+            "config": {"viewports": {"min_width": 320, "max_width": 1920}}, "coverage": {"/|default": [390]}, "issues": [issue]}
+    report.write_json(data, folder)
+    report.write_html(data, folder)
+    return folder
+
+
+@pytest.mark.e2e
+@pytest.mark.usefixtures("chromium_available")
+def test_static_report_is_safe_and_works_from_the_keyboard(tmp_path):
+    from playwright.sync_api import sync_playwright
+
+    from ui_audit.browser import launch
+
+    out = small_run(tmp_path / "it's a run", "javascript:alert(1)//", tmp_path)
+    errors = []
+    with sync_playwright() as playwright:
+        browser = launch(playwright)
+        page = browser.new_page(locale="en-US", viewport={"width": 1280, "height": 900})
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.add_init_script("Object.defineProperty(navigator, 'clipboard', {value: {writeText: async (t) => { window.copied = t; }}})")
+        page.goto((out / "index.html").as_uri())
+        page.locator(".item").first.wait_for()
+        assert page.locator('a[href^="javascript"]').count() == 0  # base_url is not a web address: no "open page" link
+        page.get_by_role("button", name="Copy accept command").click()
+        quoted = str(tmp_path / "it's a run").replace("'", "'\\''")  # the run folder as the OS writes it
+        assert page.evaluate("window.copied").startswith(f"ui-audit accept '{quoted}' ")  # one shell word
+
+        # the focus ring shows on a ghost button that sets box-shadow: none
+        settings = page.get_by_role("button", name="Settings")
+        page.locator("body").focus()
+        for _ in range(40):
+            page.keyboard.press("Tab")
+            if settings.evaluate("el => el === document.activeElement"):
+                break
+        ring = settings.evaluate("el => { const s = getComputedStyle(el); return [s.outlineStyle, s.outlineWidth]; }")
+        assert ring == ["solid", "2px"]
+        page.screenshot(path=str(tmp_path / "focus.png"))
+
+        # single-key shortcuts can be turned off, and stay off
+        page.locator(".item").first.click()
+        page.keyboard.press("/")
+        assert page.evaluate("document.activeElement.type") == "search"
+        page.keyboard.press("Escape")
+        settings.click()
+        toggle = page.get_by_role("menuitemcheckbox", name="Single-key shortcuts (j, k, /)")
+        assert toggle.get_attribute("aria-checked") == "true"
+        toggle.click()
+        page.reload()
+        page.locator(".item").first.click()
+        page.keyboard.press("/")
+        assert page.evaluate("document.activeElement.type") != "search"
+        page.get_by_role("button", name="Settings").click()
+        assert page.get_by_role("menuitemcheckbox", name="Single-key shortcuts (j, k, /)").get_attribute("aria-checked") == "false"
+        page.keyboard.press("Escape")
+
+        # dialogs have a name
+        page.get_by_role("button", name="Full screen").click()
+        assert page.get_by_role("dialog", name="Screenshot").is_visible()
+        browser.close()
+    assert errors == []
+
+
+@pytest.mark.e2e
+@pytest.mark.usefixtures("chromium_available")
+def test_app_opens_only_with_its_key_and_announces_errors(tmp_path):
+    from playwright.sync_api import sync_playwright
+
+    from ui_audit.browser import launch
+
+    project = tmp_path / "shop"
+    small_run(project / ".ui-audit" / "shop-20260101-090000", "http://localhost:3000", project)
+    server = AppServer(Workspace(project), 0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with sync_playwright() as playwright:
+            browser = launch(playwright)
+            page = browser.new_page(locale="en-US", viewport={"width": 1280, "height": 900})
+            assert page.goto(server.url).status == 403
+            assert "Open the address printed in the terminal" in page.content() and server.token not in page.content()
+            page.goto(server.launch_url)
+            page.wait_for_url(server.url)  # the key leaves the address bar
+            page.get_by_role("heading", name="shop", exact=True).wait_for()
+            page.get_by_role("button", name="New audit").click()
+            assert page.get_by_role("dialog", name="New audit").is_visible()
+            page.keyboard.press("Escape")
+            page.route("**/api/state", lambda route: route.abort())
+            page.locator('[role="alert"] .toast.bad').wait_for(timeout=15_000)
+            assert page.locator('[role="status"] .toast.bad').count() == 0
+            browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
