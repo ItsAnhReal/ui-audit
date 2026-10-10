@@ -118,15 +118,18 @@ class RuntimeLog:
 
 
 @contextmanager
-def session(cfg, engine: str = "chromium"):
-    """Yield (page, runtime_log) with the probe script installed."""
+def session(cfg, engine: str = "chromium", storage_state: dict | None = None):
+    """Yield (page, runtime_log) with the probe script installed.
+
+    `storage_state` starts the browser with another session's cookies and storage (a worker
+    taking over routes); such a session leaves `cfg.storage_state` alone."""
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as playwright:
         browser = launch(playwright, cfg.browser_path, engine=engine)
         context_args = {"viewport": {"width": 1280, "height": 900}}
-        if cfg.storage_state:
-            context_args["storage_state"] = cfg.storage_state
+        if storage_state is not None or cfg.storage_state:
+            context_args["storage_state"] = storage_state if storage_state is not None else cfg.storage_state
         if cfg.locale:
             context_args["locale"] = cfg.locale
         context = browser.new_context(**context_args)
@@ -142,7 +145,7 @@ def session(cfg, engine: str = "chromium"):
         page.on("response", lambda res: res.status >= 400 and log.on_failure(res.url, str(res.status)))
         try:
             yield page, log
-            if cfg.storage_state:
+            if cfg.storage_state and storage_state is None:
                 # Sign-in tokens rotate while the app runs; keep the newest ones so the next
                 # audit does not start from a token that has already been exchanged.
                 try:

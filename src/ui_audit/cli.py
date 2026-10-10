@@ -63,6 +63,8 @@ def _load_config(args):
         cfg.browsers = args.browsers
     if getattr(args, "fast", False):
         cfg.states.sweep = "key"
+    if getattr(args, "workers", None) is not None:
+        cfg.workers = args.workers
     return cfg, path
 
 
@@ -414,6 +416,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="browsers to audit in, e.g. chromium,webkit,firefox (webkit is Safari's engine; default chromium)")
     p.add_argument("--fast", action="store_true",
                    help="probe opened menus, tabs and dialogs only at key widths (same as [states] sweep = \"key\")")
+    p.add_argument("--workers", type=int, metavar="N",
+                   help="routes measured at once, each in a browser of its own (default 1; 0 picks from the CPU count)")
     p.set_defaults(func=cmd_audit)
 
     p = sub.add_parser("accept", help="mark findings as intentional so later audits stop counting them")

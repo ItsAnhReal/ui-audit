@@ -74,6 +74,19 @@ def test_blocked_trackers_are_not_failed_resources(demo_site, tmp_path):
     assert any("pixel.tracker.test" in m for m in failed([]))
 
 
+def test_workers_default_to_one_and_follow_the_cli(monkeypatch, tmp_path):
+    from ui_audit.cli import _load_config, build_parser
+
+    assert from_dict({}).workers == 1 and audit.worker_count(from_dict({})) == 1
+    monkeypatch.setattr(audit.os, "cpu_count", lambda: 32)
+    assert audit.worker_count(from_dict({"workers": 0})) == audit.AUTO_WORKERS_MAX
+    monkeypatch.setattr(audit.os, "cpu_count", lambda: 1)
+    assert audit.worker_count(from_dict({"workers": 0})) == 1
+    monkeypatch.chdir(tmp_path)  # no ui-audit.toml to find
+    args = build_parser().parse_args(["audit", "http://localhost:1", "--workers", "3"])
+    assert _load_config(args)[0].workers == 3
+
+
 def test_a_state_found_at_the_narrowest_width_is_not_loaded_twice(monkeypatch):
     from ui_audit import states
 
@@ -109,3 +122,29 @@ def test_a_state_found_at_the_narrowest_width_is_not_loaded_twice(monkeypatch):
     assert states.apply(page, cfg, state, first, 900, loaded) and loads == [320, 400]
     # A state without a trigger is loaded by apply.
     assert states.first_width(page, cfg, states.default_state("/"), [320, 400]) == (320, False)
+
+
+@pytest.mark.e2e
+@pytest.mark.usefixtures("chromium_available")
+def test_routes_measured_side_by_side_report_as_one_after_another(demo_site, tmp_path):
+    url, site = demo_site
+
+    def run(workers):
+        cfg = from_dict({"base_url": url, "project_root": str(site), "output": str(tmp_path / str(workers)),
+                         "settle_ms": 0, "workers": workers, "viewports": {"widths": [390, 768, 1280]}})
+        lines = []
+        return audit.run(cfg, log=lines.append), lines
+
+    (one, _), (three, lines) = run(1), run(3)
+    assert len(one["routes"]) >= 3
+    for key in ("routes", "states", "coverage", "coverage_truncated", "breakpoints"):
+        assert one[key] == three[key], key
+    assert [i["signature"] for i in one["issues"]] == [i["signature"] for i in three["issues"]]
+    assert [i["widths"] for i in one["issues"]] == [i["widths"] for i in three["issues"]]
+    assert [(c["route"], c["state"], c["width"]) for c in one["captures"]] == \
+           [(c["route"], c["state"], c["width"]) for c in three["captures"]]
+    # Each route's lines stay together: a state line follows its route's line, never another route's.
+    route_lines = [n for n, line in enumerate(lines) if "state(s), breakpoints" in line]
+    assert len(route_lines) == len([r for r in one["routes"] if r.get("status") == "audited"])
+    for start, end in zip(route_lines, route_lines[1:] + [len(lines)]):
+        assert all(line.startswith("  ") for line in lines[start + 1:end])

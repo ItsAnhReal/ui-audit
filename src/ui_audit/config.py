@@ -111,8 +111,8 @@ class Config:
     setup: list[dict[str, Any]] = field(default_factory=list)
     # Requests turned away: "trackers" (analytics that render nothing) or host names. [] blocks nothing.
     block_requests: list[str] = field(default_factory=lambda: ["trackers"])
-    # Routes audited at the same time, each in a browser of its own; 0 picks from the CPU count.
-    workers: int = 0
+    # Routes measured at the same time, each in a browser of its own; 0 picks from the CPU count.
+    workers: int = 1
     routes: RouteConfig = field(default_factory=RouteConfig)
     states: StateConfig = field(default_factory=StateConfig)
     viewports: ViewportConfig = field(default_factory=ViewportConfig)
@@ -236,8 +236,8 @@ browsers = ["chromium"]
 # setup = [{{ click = "#close-promo" }}]
 # Requests turned away: "trackers" (analytics that render nothing) or host names; [] for none.
 block_requests = ["trackers"]
-# Routes audited at the same time, each in its own browser; 0 picks from the CPU count.
-workers = 0
+# Routes measured at the same time, each in its own browser; 0 picks from the CPU count.
+workers = 1
 
 [routes]
 include = {include}

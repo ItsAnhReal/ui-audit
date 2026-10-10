@@ -4,6 +4,8 @@
 
 - **Changed issue signatures** — compare against a fresh baseline after upgrading. Selectors leave out generated class names and ids (CSS Modules, styled-components, emotion, Svelte, styled-jsx, React `useId`, Radix), prefer `data-testid`/`data-test`/`data-cy`, stable ids and a control's role and `aria-label`, and are as short as is unique on the page. Discovered state ids leave out counts ("Cart (3)" is `expand-cart`), and console errors and failed requests are identified without query strings, bundle hashes, timestamps and ids (the message keeps the raw text).
 - `verify` no longer counts a finding as fixed where its check hit `max_issues_per_check` or the 400-control limit (recorded in report.json as `coverage_truncated`), and lists findings on routes or states the baseline did not audit as `new_scope` instead of introduced. Out-of-range numbers in `ui-audit.toml` are config errors, and a configured `0` (e.g. `min_target_size = 0`) is no longer replaced by the default.
+- Faster audits with the same findings: the probe runs in linear time on large pages (20,000 elements: 2.7 s to 0.5 s per width), source hints come from an index built once, a state found at the narrowest width is no longer loaded twice, and analytics requests are blocked (`block_requests`, default `["trackers"]`) so pages go idle sooner. `--workers N` (`workers`, default 1) measures N routes at once in browsers of their own; the demo audit goes from 51 s to 43 s, and to 26 s with two workers.
+- Measuring waits for web fonts that are still loading, also after each resize in the sweep, and refinement spends its budget on every defect boundary before refining one twice.
 
 ## 0.1.0 — first public release
 
