@@ -16,6 +16,8 @@ NOT_APPLICABLE = frozenset({"<state not applicable>"})
 # The sweep waits for running transitions (browser.settle) rather than for a fixed time.
 SWEEP_SETTLE_MS = 0
 CANDIDATE_FACTOR = 8
+# Below this width a page is read as a phone layout, also when phone emulation is turned off.
+MOBILE_WIDTH = 768
 
 
 def _file_slug(route: str) -> str:
@@ -128,7 +130,8 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                 lead_records[(path, record["id"])].setdefault("browsers", {})[engine] = status
             event("state", path=path, state=record["id"], status=status)
 
-        with browser.session(cfg, engine) as (page, runtime):
+        with browser.session(cfg, engine) as opened:
+            page, runtime = opened
             if len(cfg.browsers) > 1:
                 log(f"{label}:")
             errors.extend(states.run_setup(page, cfg) if leading else
@@ -186,6 +189,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     if leading:
                         consent = engine_consent
                     if engine_consent:
+                        opened.reset_mobile()  # the phone page starts again from the storage without the banner
                         runtime.clear()
                         response = states.open_page(page, cfg, path, 1280, 900)
                 kind = _not_a_page(response)
@@ -255,19 +259,30 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                         finish(record, path, "skipped: no widths in range")
                         continue
 
-                    first = states.first_width(page, cfg, state, probe_widths)
+                    first = states.first_width(opened.page_for(probe_widths[0]), cfg, state, probe_widths)
                     if first is None:
                         finish(record, path, "skipped: its control is not shown at any width")
                         continue
+                    # Narrow widths are measured on a phone page, the others on the desktop page. The
+                    # state is replayed on each page the first time a width needs it.
+                    applied: dict[int, bool] = {}
+
+                    def page_at(width: int, _state=state, _applied=applied):
+                        target = opened.page_for(width)
+                        if id(target) not in _applied:
+                            _applied[id(target)] = states.apply(target, cfg, _state, width, viewports.height_for(width))
+                        return target if _applied[id(target)] else None
+
                     runtime.clear()
-                    if not states.apply(page, cfg, state, first, viewports.height_for(first)):
+                    first_page = page_at(first)
+                    if first_page is None:
                         finish(record, path, "skipped: could not be applied")
                         continue
                     if state.kind != "default":
                         note_sources(page, path)  # an opened dialog or menu brings its own components
                         new_errors = [m for m in runtime.console_errors if m not in baseline_errors]
                         # The error came with opening this state, so the component that opened is where to look.
-                        layer = (page.evaluate("t => window.__uiAudit.layerInfo(t)", state.trigger)
+                        layer = (first_page.evaluate("t => window.__uiAudit.layerInfo(t)", state.trigger)
                                  if new_errors else None)
                         for message in new_errors:
                             issue_set.runtime("console-error", path, state.id, message, first, hints=layer, engine=engine)
@@ -278,14 +293,19 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     results: dict[int, dict] = {}
                     not_applicable: set[int] = set()
 
-                    def probe(width: int, _state=state, _results=results, _na=not_applicable) -> frozenset[str]:
+                    def probe(width: int, _state=state, _results=results, _na=not_applicable,
+                              _page_at=page_at) -> frozenset[str]:
                         nonlocal probe_count
-                        browser.resize(page, width, viewports.height_for(width), min(cfg.settle_ms, SWEEP_SETTLE_MS))
-                        probe_count += 1
-                        if _state.trigger and not page.evaluate("s => window.__uiAudit.isTriggerVisible(s)", _state.trigger):
+                        target = _page_at(width)
+                        if target is None:
                             _na.add(width)
                             return NOT_APPLICABLE
-                        result = page.evaluate("o => window.__uiAudit.probe(o)", opts)
+                        browser.resize(target, width, viewports.height_for(width), min(cfg.settle_ms, SWEEP_SETTLE_MS))
+                        probe_count += 1
+                        if _state.trigger and not target.evaluate("s => window.__uiAudit.isTriggerVisible(s)", _state.trigger):
+                            _na.add(width)
+                            return NOT_APPLICABLE
+                        result = target.evaluate("o => window.__uiAudit.probe(o)", opts)
                         _results[width] = result
                         for raw in result["issues"]:
                             issue_set.observe(raw, path, _state.id, width, engine)
@@ -317,10 +337,15 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                             standard, bp_widths, anomalies, {w for w, r in results.items() if r["issues"]},
                             vc.max_captures, lo, hi)
                     plans = [p for p in plans if p.width not in not_applicable]
+                    if state.kind == "default":
+                        _check_viewport_meta(first_page, issue_set, path, engine, plans, results, vc.mobile_below or MOBILE_WIDTH)
 
                     for plan in plans:
                         try:
-                            captures.append(_capture(page, cfg, shots_dir, out_dir, path, state, plan, results, probe, engine))
+                            target = page_at(plan.width)
+                            if target is None:
+                                continue
+                            captures.append(_capture(target, cfg, shots_dir, out_dir, path, state, plan, results, probe, engine))
                         except Exception as exc:  # noqa: BLE001 - keep the other screenshots
                             errors.append(f"{where(path)} [{state.id}] {plan.width}px: screenshot failed ({str(exc)[:120]})")
                     if leading:
@@ -396,6 +421,21 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
     report_mod.write_html(result, out_dir)
     semantic.build_packet(result, out_dir)
     return result
+
+
+def _check_viewport_meta(page, issue_set: IssueSet, path: str, engine: str, plans: list, results: dict,
+                         narrow_below: int) -> None:
+    """Report a missing or zoom-blocking meta viewport once per route, at the narrowest width
+    captured (or probed) below `narrow_below`, so it comes with a phone screenshot."""
+    narrow = sorted(p.width for p in plans if p.width < narrow_below) or sorted(w for w in results if w < narrow_below)
+    if not narrow:
+        return
+    try:
+        raw = page.evaluate("() => window.__uiAudit.viewportMeta()")
+    except Exception:  # noqa: BLE001 - a page that navigated away is measured by its sweep only
+        return
+    if raw:
+        issue_set.observe(raw, path, "default", narrow[0], engine)
 
 
 def _capture(page, cfg: Config, shots_dir: Path, out_dir: Path, path: str, state, plan, results: dict, probe,

@@ -84,9 +84,45 @@ class RuntimeLog:
         self.failed_resources.clear()
 
 
+# Engines that can emulate a phone (meta viewport, touch, `hover: none`). Firefox cannot.
+MOBILE_ENGINES = ("chromium", "webkit")
+
+
+class Session(tuple):
+    """(page, runtime_log), plus `mobile(width)`: the page to measure `width` on."""
+
+    def __new__(cls, page, log, opener=None, mobile_below: int = 0):
+        opened = super().__new__(cls, (page, log))
+        opened._opener, opened._mobile_below, opened._mobile = opener, mobile_below, None
+        return opened
+
+    def page_for(self, width: int):
+        """The phone page below `mobile_below`, else the desktop page. The phone context starts
+        from the desktop one's cookies and storage, so sign-in and consent carry over."""
+        if not self._opener or width >= self._mobile_below:
+            return self[0]
+        if self._mobile is None:
+            self._mobile = self._opener()
+        return self._mobile[1]
+
+    def reset_mobile(self) -> None:
+        """Close the phone page so the next one starts from the desktop page's storage again."""
+        if self._mobile is not None:
+            self._mobile[0].close()
+            self._mobile = None
+
+
+def _watch(page, log: "RuntimeLog") -> None:
+    page.on("console", log.on_console)
+    page.on("pageerror", lambda exc: log.console_errors.append(str(exc)[:300]))
+    page.on("requestfailed", lambda req: log.on_failure(req.url, str(req.failure)))
+    page.on("response", lambda res: res.status >= 400 and log.on_failure(res.url, str(res.status)))
+
+
 @contextmanager
 def session(cfg, engine: str = "chromium"):
-    """Yield (page, runtime_log) with the probe script installed."""
+    """Yield a Session, (page, runtime_log), with the probe script installed. Widths below
+    `viewports.mobile_below` are measured in a second context that emulates a phone."""
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as playwright:
@@ -100,12 +136,21 @@ def session(cfg, engine: str = "chromium"):
         context.add_init_script(PROBE_JS)
         page = context.new_page()
         log = RuntimeLog()
-        page.on("console", log.on_console)
-        page.on("pageerror", lambda exc: log.console_errors.append(str(exc)[:300]))
-        page.on("requestfailed", lambda req: log.on_failure(req.url, str(req.failure)))
-        page.on("response", lambda res: res.status >= 400 and log.on_failure(res.url, str(res.status)))
+        _watch(page, log)
+
+        def open_mobile():
+            phone = browser.new_context(**{**context_args, "viewport": {"width": 390, "height": 844},
+                                           "storage_state": context.storage_state(),
+                                           "is_mobile": True, "has_touch": True})
+            phone.add_init_script(PROBE_JS)
+            mobile_page = phone.new_page()
+            _watch(mobile_page, log)
+            return phone, mobile_page
+
+        mobile_below = cfg.viewports.mobile_below if engine in MOBILE_ENGINES else 0
+        opened = Session(page, log, open_mobile if mobile_below else None, mobile_below)
         try:
-            yield page, log
+            yield opened
             if cfg.storage_state:
                 # Sign-in tokens rotate while the app runs; keep the newest ones so the next
                 # audit does not start from a token that has already been exchanged.
@@ -115,6 +160,7 @@ def session(cfg, engine: str = "chromium"):
                 except Exception:  # noqa: BLE001 - a read-only session file still works for this run
                     pass
         finally:
+            opened.reset_mobile()
             context.close()
             browser.close()
 

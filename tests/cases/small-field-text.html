@@ -1,0 +1,12 @@
+<!-- expect: small-input-font=1 -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>case</title><style>
+/* One 14px search field, which iOS zooms in on (reported below 768px only). A 16px field, a
+   disabled and a read-only one, and a checkbox are fine. */
+body { margin: 0; padding: 24px; font: 16px/1.5 sans-serif; }
+input, select { display: block; margin: 8px 0; font-size: 16px; height: 40px; }
+.small { font-size: 14px; } .tiny { font-size: 12px; }
+</style></head><body>
+<input class="small" aria-label="Search"><input aria-label="Name"><select aria-label="Plan"><option>Free</option></select>
+<input class="tiny" aria-label="Locked" disabled><input class="tiny" aria-label="Id" readonly value="42">
+<label><input class="tiny" type="checkbox"> Remember me</label>
+</body></html>

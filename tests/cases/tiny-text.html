@@ -1,0 +1,12 @@
+<!-- expect: tiny-text=1 -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>case</title><style>
+/* 10px fine print is too small. Footnote marks, a short badge, hidden text and chart labels
+   drawn in SVG are left alone. */
+body { margin: 0; padding: 24px; font: 16px/1.5 sans-serif; }
+.fine { font-size: 10px; } sup { font-size: 9px; } .badge { font-size: 10px; } .deco { font-size: 8px; }
+</style></head><body>
+<p>Prices include tax<sup>1</sup>. Inbox <span class="badge">12</span></p>
+<p class="fine">Prices may change without notice.</p>
+<p aria-hidden="true" class="deco">decorative text</p>
+<svg width="200" height="40" role="img" aria-label="Chart"><text x="0" y="20" font-size="9">Jan Feb Mar</text></svg>
+</body></html>

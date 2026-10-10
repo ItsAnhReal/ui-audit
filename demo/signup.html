@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8">
+<!-- BUG viewport-meta: zooming is switched off. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Demo · Sign up</title>
+<!-- Its own styles, so the defects planted here stay apart from the other pages. -->
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #1d2433; }
+/* BUG sticky-covers-viewport: on phones the sticky header stacks to ~180px and, with the
+   fixed bar below, covers over 30% of the screen. */
+.top { position: sticky; top: 0; background: #fff; border-bottom: 1px solid #e4e7ec; padding: 12px 20px; display: flex; gap: 16px; align-items: center; }
+.top p { margin: 0; }
+@media (max-width: 767px) { .top { flex-direction: column; align-items: flex-start; padding: 40px 20px; gap: 12px; } }
+main { padding: 20px; max-width: 720px; margin: 0 auto; }
+label { display: block; margin: 12px 0 4px; }
+/* BUG small-input-font: 14px field text, which iOS zooms in on (checked below 768px). */
+input { width: 100%; max-width: 360px; padding: 10px; font-size: 14px; }
+.photo { width: 160px; height: 160px; } /* BUG distorted-image: a 2:1 picture drawn square */
+/* BUG tiny-text: 10px legal text. */
+.legal { font-size: 10px; }
+/* BUG fixed-covers-end: the page leaves no room for the bar, so it hides the legal text at the end. */
+.cta { position: fixed; left: 0; right: 0; bottom: 0; padding: 24px 20px; background: #f2f4f7; border-top: 1px solid #e4e7ec; }
+.cta button { width: 100%; height: 48px; font: inherit; }
+</style></head>
+<body>
+<header class="top">
+  <a href="index.html">Acme Cloud</a>
+  <p>Start free, no card needed.</p>
+  <p>Questions? <a href="pricing.html">See pricing</a></p>
+</header>
+<main>
+  <h1>Create your account</h1>
+  <p>Deploy from any branch, watch logs, traces and metrics in one place, and scale with your traffic.
+  Your first project is free for as long as you like.</p>
+  <img class="photo" alt="The Acme team" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAIAAADwyuo0AAAAEElEQVR4nGOwbvoGRwzIHACq+g2Z2ahgEAAAAABJRU5ErkJggg==">
+  <!-- BUG broken-image: the logo's data cannot be decoded. -->
+  <img alt="Partner logo" width="120" height="40" src="data:image/png;base64,iVBORw0KGgo=">
+  <form>
+    <label for="email">Work email</label><input id="email" type="email" autocomplete="email">
+    <label for="password">Password</label><input id="password" type="password" autocomplete="new-password">
+  </form>
+  <p>Teams of up to five people use every feature for free. Larger teams pay per seat, billed monthly,
+  and can cancel at any time from the billing page.</p>
+  <p>We keep your data in the region you choose and never sell it.</p>
+  <p class="legal">By creating an account you accept the terms of service and the privacy policy.</p>
+</main>
+<div class="cta"><button>Create account</button></div>
+</body>
+</html>

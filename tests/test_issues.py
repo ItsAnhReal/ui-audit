@@ -29,8 +29,18 @@ def test_state_duplicates_collapse_into_default():
 
 
 def test_sweep_signature_ignores_width_independent_checks():
-    result = {"issues": [raw(), raw("unnamed-control", "P2", "button"), raw("small-target", "P2", "a")]}
+    result = {"issues": [raw(), raw("unnamed-control", "P2", "button"), raw("small-target", "P2", "a"),
+                         raw("tiny-text", "P3", "p"), raw("small-input-font", "P3", "input"), raw("broken-image", "P2", "img")]}
     assert sweep_signature(result) == frozenset({"horizontal-overflow|.hero"})
+
+
+def test_overflow_cause_is_kept_without_changing_the_signature():
+    issues = IssueSet()
+    issues.observe(raw(), "/", "default", 800)
+    issues.observe({**raw(), "cause": "transform moves it 80px to the right"}, "/", "default", 900)
+    (issue,) = issues.all()
+    assert issue["cause"] == "transform moves it 80px to the right"
+    assert issue["signature"] == "horizontal-overflow|/|default|.hero"
 
 
 def test_groups_fold_one_component_across_routes():

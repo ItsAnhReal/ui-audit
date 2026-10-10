@@ -46,6 +46,7 @@ def test_template_round_trips():
     ({"viewports": {"min_width": 800, "max_width": 400}}, r"min_width must not exceed"),
     ({"viewports": {"max_captures": True}}, r"viewports.max_captures must be an integer"),
     ({"routes": {"max_routes": 0}}, r"routes.max_routes must be at least 1"),
+    ({"viewports": {"mobile_below": -1}}, r"viewports.mobile_below must be at least 0"),
 ])
 def test_numbers_out_of_range_are_rejected(data, message):
     with pytest.raises(ConfigError, match=message):
@@ -53,5 +54,7 @@ def test_numbers_out_of_range_are_rejected(data, message):
 
 
 def test_zero_is_a_valid_setting():
-    cfg = from_dict({"checks": {"overlap_threshold": 0, "min_target_size": 0}, "viewports": {"max_captures": 0}})
+    cfg = from_dict({"checks": {"overlap_threshold": 0, "min_target_size": 0},
+                     "viewports": {"max_captures": 0, "mobile_below": 0}})
     assert cfg.checks.overlap_threshold == 0 and cfg.checks.min_target_size == 0
+    assert cfg.viewports.mobile_below == 0

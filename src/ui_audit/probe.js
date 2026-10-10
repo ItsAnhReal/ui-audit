@@ -442,6 +442,168 @@
     return needed > box + 1 ? { node: parent, needed: Math.round(needed), box: Math.round(box) } : null;
   }
 
+  // Why el sticks out past the right edge, as a short clause for the message, or null when it is
+  // not clear: a flex item that cannot shrink, a box wider than the viewport, a transform, a
+  // negative margin or offset, or 100vw that includes the scrollbar.
+  function overflowCause(el, vw) {
+    const style = getComputedStyle(el);
+    const r = el.getBoundingClientRect();
+    const px = (value) => Math.round(parseFloat(value) || 0);
+    if (style.transform && style.transform !== "none") {
+      try {
+        const shift = new DOMMatrixReadOnly(style.transform).m41;
+        if (shift > 1 && r.right - shift <= vw + 1) return `transform moves it ${Math.round(shift)}px to the right`;
+      } catch (e) { /* not a 2D matrix */ }
+    }
+    if (style.position !== "static" && px(style.right) < 0 && style.right !== "auto") {
+      return `it is positioned past the edge with right: ${style.right}`;
+    }
+    if (px(style.marginRight) < 0) return `a negative margin-right (${style.marginRight}) pulls it past its container`;
+    if (px(style.marginLeft) < 0 && r.width <= vw) return `a negative margin-left (${style.marginLeft}) shifts it sideways`;
+    // A phone page zoomed out to show the overflow also has innerWidth above clientWidth; a
+    // scrollbar is narrow.
+    const scrollbar = window.innerWidth - document.documentElement.clientWidth;
+    if (scrollbar > 0 && scrollbar <= 24 && Math.abs(r.width - window.innerWidth) <= 1) {
+      return `it is 100vw wide, which includes the ${scrollbar}px scrollbar; use 100% instead`;
+    }
+    const parent = el.parentElement;
+    const parentStyle = parent ? getComputedStyle(parent) : null;
+    if (parentStyle && /flex/.test(parentStyle.display) && !/column/.test(parentStyle.flexDirection)) {
+      if (style.flexShrink === "0") return "it is a flex item that does not shrink (flex-shrink: 0)";
+      if (style.minWidth === "auto" && r.right > parent.getBoundingClientRect().right + 1) {
+        return "it is a flex item with min-width: auto that cannot shrink below its content (a long word, URL or pre); give it min-width: 0";
+      }
+    }
+    if (["IMG", "VIDEO", "IFRAME", "CANVAS", "SVG"].includes(el.tagName.toUpperCase()) && r.width > vw + 1) {
+      return `it is ${Math.round(r.width)}px wide with no max-width: 100%`;
+    }
+    if (px(style.minWidth) > vw) return `min-width: ${style.minWidth} is wider than the viewport`;
+    if (parent && r.width > vw + 1 && style.display !== "inline" && !/table/.test(style.display)) {
+      const box = parent.clientWidth - px(parentStyle.paddingLeft) - px(parentStyle.paddingRight);
+      if (r.width > box + 1) return `it has a fixed width of ${Math.round(r.width)}px`;
+    }
+    return null;
+  }
+
+  // Below this width a page is read as a phone layout.
+  const PHONE_WIDTH = 768;
+
+  // Fixed and sticky bars along the top or bottom of the viewport, with the outermost box of each.
+  // Dialogs, opened menus and consent banners (the audit closes those first) cover the page on purpose.
+  function pinnedBars(visible, vw, vh) {
+    const bars = [];
+    for (const el of visible) {
+      const style = getComputedStyle(el);
+      if (style.position !== "fixed" && style.position !== "sticky") continue;
+      if (el.parentElement && pinnedLayer(el.parentElement)) continue;
+      if (el.closest(LAYER) || el.querySelector("[aria-modal=true],[aria-expanded=true]")) continue;
+      if (CONSENT_TOPIC.test(el.innerText || "")) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < vw * 0.6 || r.height < 8 || r.height > vh * 0.6) continue;
+      // A sticky box only stays while its parent is on screen; in a parent about its own height it scrolls away.
+      if (style.position === "sticky" && el.parentElement && el.parentElement.getBoundingClientRect().height < r.height + vh * 0.5) continue;
+      const top = r.top <= 1 && r.bottom > 0 && style.top !== "auto";
+      const bottom = r.bottom >= vh - 1 && r.top < vh && (style.position === "fixed" || style.bottom !== "auto");
+      if (top || bottom) bars.push({ el, r, edge: top ? "top" : "bottom", fixed: style.position === "fixed" });
+    }
+    return bars;
+  }
+
+  function pinnedBarIssues(visible, vw) {
+    const vh = document.documentElement.clientHeight || window.innerHeight;
+    const scrollHeight = document.documentElement.scrollHeight;
+    const bars = pinnedBars(visible, vw, vh);
+    const issues = [];
+    // a) On a phone, bars that together take more than 30% of the screen leave little to read.
+    if (vw < PHONE_WIDTH && bars.length && scrollHeight > vh + 1) {
+      let covered = 0;
+      for (const edge of ["top", "bottom"]) {
+        const spans = bars.filter((b) => b.edge === edge).map((b) => [Math.max(b.r.top, 0), Math.min(b.r.bottom, vh)]).sort((a, b) => a[0] - b[0]);
+        let end = -Infinity;
+        for (const [from, to] of spans) {
+          covered += Math.max(to - Math.max(from, end), 0);
+          end = Math.max(end, to);
+        }
+      }
+      if (covered > vh * 0.3) {
+        const tallest = bars.reduce((a, b) => (b.r.height > a.r.height ? b : a));
+        issues.push(makeIssue("sticky-covers-viewport", "P2", tallest.el,
+          `Fixed and sticky bars cover ${Math.round(covered)}px (${Math.round(covered / vh * 100)}%) of a ${vh}px high screen; this one is ${Math.round(tallest.r.height)}px.`));
+      }
+    }
+    // b) Scrolled to the end, a fixed bottom bar lies over the last text or control. Where the
+    // page itself scrolls, a fixed bar's place in the page at the end follows from its place now.
+    const endShift = Math.max(scrollHeight - vh, 0) - window.scrollY;
+    for (const bar of bars) {
+      if (bar.edge !== "bottom" || !bar.fixed) continue;
+      const from = bar.r.top + endShift, to = bar.r.bottom + endShift;  // where the bar sits, in today's coordinates
+      for (const el of visible) {
+        if (bar.el.contains(el) || pinnedLayer(el) || el.closest(LAYER)) continue;
+        if (!el.matches(INTERACTIVE) && !hasOwnText(el)) continue;
+        if (isScreenReaderOnly(el) || scrollingAncestor(el)) continue;
+        const r = el.getBoundingClientRect();
+        const overlap = Math.min(r.bottom, to) - Math.max(r.top, from);
+        if (r.height && overlap >= r.height * 0.5) {
+          issues.push(makeIssue("fixed-covers-end", "P2", bar.el,
+            `Scrolled to the end, this ${Math.round(bar.r.height)}px fixed bar covers ${el.matches(INTERACTIVE) ? "the control" : "the text"} "${(accessibleName(el) || snippet(el)).slice(0, 40)}"; leave room for it below the content.`));
+          break;
+        }
+      }
+    }
+    return issues;
+  }
+
+  // An ancestor that scrolls or clips vertically: content inside an app's own scroll area moves
+  // under a fixed bar while the page stays put, so where it is now says nothing about the end.
+  function scrollingAncestor(el) {
+    for (let node = el.parentElement; node && node !== document.body && node !== document.documentElement; node = node.parentElement) {
+      if (getComputedStyle(node).overflowY !== "visible") return node;
+    }
+    return null;
+  }
+
+  // Elements whose own text is under 12px. Footnote marks (sup, sub), hidden text, short badges
+  // ("3", "New") and chart labels drawn in SVG are left out.
+  function tinyText(visible) {
+    const found = [];
+    for (const el of visible) {
+      if (!hasOwnText(el) || el.closest("sup,sub,svg,select,[aria-hidden=true]") || isScreenReaderOnly(el)) continue;
+      const size = parseFloat(getComputedStyle(el).fontSize);
+      if (!size || size >= 12) continue;
+      const own = Array.from(el.childNodes).filter((n) => n.nodeType === 3).map((n) => n.nodeValue).join("").replace(/\s+/g, " ").trim();
+      if (own.length <= 3) continue;
+      found.push(el);
+    }
+    return found;
+  }
+
+  // A meta viewport phones can use: missing, without width=device-width, or blocking zoom.
+  function viewportMeta() {
+    const metas = document.querySelectorAll("meta[name=viewport i]");
+    const meta = metas[metas.length - 1];
+    if (!meta) {
+      return { check: "viewport-meta", severity: "P1", selector: "head", message:
+        "The page has no <meta name=\"viewport\">; phones lay it out 980px wide and shrink it, so text is tiny and the page's own breakpoints never apply." };
+    }
+    const content = (meta.getAttribute("content") || "").toLowerCase();
+    const props = {};
+    for (const part of content.split(/[,;]/)) {
+      const [key, value] = part.split("=").map((t) => (t || "").trim());
+      if (key) props[key] = value || "";
+    }
+    const selector = "meta[name=viewport]";
+    if (props.width !== "device-width" && !(props.width === undefined && parseFloat(props["initial-scale"]) === 1)) {
+      return { check: "viewport-meta", severity: "P1", selector, message:
+        `<meta name="viewport" content="${content.slice(0, 80)}"> does not set width=device-width; phones lay the page out ${props.width && /^\d+$/.test(props.width) ? props.width : 980}px wide instead.` };
+    }
+    const max = parseFloat(props["maximum-scale"]);
+    if (["no", "0"].includes(props["user-scalable"]) || (!isNaN(max) && max < 2)) {
+      return { check: "viewport-meta", severity: "P2", selector, message:
+        `<meta name="viewport" content="${content.slice(0, 80)}"> stops people zooming in (WCAG 1.4.4); drop user-scalable=no and maximum-scale.` };
+    }
+    return null;
+  }
+
   function makeIssue(check, severity, el, message) {
     return { check, severity, selector: cssPath(el), message, rect: rectOf(el), hints: sourceInfo(el) };
   }
@@ -480,6 +642,12 @@
     const beyondRight = (el) => el.getBoundingClientRect().right + window.scrollX > vw + 1;
     // What the overflow check reported; the edge check below does not report the same cause again.
     const overflowRoots = new Set();
+    // overflow-x: hidden or clip on html or body: what sticks out is cut off, not scrollable.
+    const pageClip = [document.documentElement, document.body].filter(Boolean)
+      .map((n) => getComputedStyle(n).overflowX).find((v) => v === "hidden" || v === "clip");
+    const scrolls = (by) => pageClip
+      ? `${by}px cut off by overflow-x: ${pageClip} on the page, so it cannot be scrolled to`
+      : `page scrolls sideways by ${by}px`;
     if (pageOverflows) {
       const by = scrollWidth - vw;
       const severity = by > SMALL_OVERFLOW ? "P1" : "P2";
@@ -499,15 +667,18 @@
           overflowRoots.add(target);
           if (grid) {
             push(makeIssue("horizontal-overflow", severity, target,
-              `Grid columns need ${grid.needed}px but the grid is ${grid.box}px wide in a ${vw}px viewport (page scrolls sideways by ${by}px).`));
+              `Grid columns need ${grid.needed}px but the grid is ${grid.box}px wide in a ${vw}px viewport (${scrolls(by)}).`));
           } else if (isScreenReaderOnly(el)) {
             const right = Math.round(el.getBoundingClientRect().right + window.scrollX);
             push(makeIssue("horizontal-overflow", severity, el,
-              `Screen-reader-only text "${snippet(el).slice(0, 40)}" sits at ${right}px in a ${vw}px viewport, outside the scrolling box it belongs to (page scrolls sideways by ${by}px); give that box position: relative so it clips the text.`));
+              `Screen-reader-only text "${snippet(el).slice(0, 40)}" sits at ${right}px in a ${vw}px viewport, outside the scrolling box it belongs to (${scrolls(by)}); give that box position: relative so it clips the text.`));
           } else {
             const right = Math.round(el.getBoundingClientRect().right + window.scrollX);
-            push(makeIssue("horizontal-overflow", severity, el,
-              `Extends to ${right}px in a ${vw}px viewport (page scrolls sideways by ${by}px).`));
+            const cause = overflowCause(el, vw);
+            const issue = makeIssue("horizontal-overflow", severity, el,
+              `Extends to ${right}px in a ${vw}px viewport (${scrolls(by)}).` + (cause ? ` Cause: ${cause}.` : ""));
+            if (cause) issue.cause = cause;
+            push(issue);
           }
         }
       } else {
@@ -518,11 +689,11 @@
         if (culprit && culprit.el) {
           overflowRoots.add(culprit.el);
           push(makeIssue("horizontal-overflow", severity, culprit.el,
-            `Text "${culprit.text}" runs to ${culprit.right}px in a ${vw}px viewport (page scrolls sideways by ${by}px).`));
+            `Text "${culprit.text}" runs to ${culprit.right}px in a ${vw}px viewport (${scrolls(by)}).`));
         } else if (culprit) {
           overflowRoots.add(culprit);
           push(makeIssue("horizontal-overflow", severity, culprit,
-            `An invisible element extends to ${Math.round(culprit.getBoundingClientRect().right + window.scrollX)}px in a ${vw}px viewport (page scrolls sideways by ${by}px).`));
+            `An invisible element extends to ${Math.round(culprit.getBoundingClientRect().right + window.scrollX)}px in a ${vw}px viewport (${scrolls(by)}).`));
         } else {
           push(makeIssue("horizontal-overflow", severity, document.documentElement,
             `Page is ${scrollWidth}px wide in a ${vw}px viewport.`));
@@ -676,6 +847,47 @@
     for (const el of controls) {
       if (accessibleName(el)) continue;
       push(makeIssue("unnamed-control", "P2", el, `${el.tagName.toLowerCase()} has no accessible name.`));
+    }
+
+    // 5. Bars that stay on screen and cover the page.
+    for (const issue of pinnedBarIssues(visible, vw)) push(issue);
+
+    // 6. Phone readability: field text iOS zooms in on, and text too small to read.
+    if (vw < PHONE_WIDTH) {
+      for (const el of visible) {
+        if (!el.matches(TEXT_FIELD) || el.disabled || el.readOnly) continue;
+        const size = parseFloat(getComputedStyle(el).fontSize);
+        if (size && size < 16) {
+          push(makeIssue("small-input-font", "P3", el,
+            `Field text is ${Math.round(size * 10) / 10}px; iOS zooms the page in when a field under 16px gets focus.`));
+        }
+      }
+    }
+    for (const el of tinyText(visible)) {
+      push(makeIssue("tiny-text", "P3", el,
+        `Text is ${Math.round(parseFloat(getComputedStyle(el).fontSize) * 10) / 10}px, under 12px: "${snippet(el).slice(0, 40)}"`));
+    }
+
+    // 7. Images that did not load, or are drawn in another aspect ratio than their picture.
+    for (const img of all) {
+      if (img.tagName !== "IMG") continue;
+      const style = getComputedStyle(img);
+      if (style.display === "none" || style.visibility === "hidden" || !img.getClientRects().length) continue;
+      const src = img.currentSrc || img.getAttribute("src") || "";
+      if (img.complete && img.naturalWidth === 0 && src.trim()) {
+        push(makeIssue("broken-image", "P2", img, `Image did not load: ${src.slice(0, 100)}`));
+        continue;
+      }
+      if (!img.complete || !img.naturalWidth || !img.naturalHeight || style.objectFit !== "fill" || !isVisible(img)) continue;
+      if (/\.svg([?#]|$)|^data:image\/svg/i.test(src)) continue;  // an SVG keeps its own aspect ratio
+      const w = img.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
+      const h = img.clientHeight - (parseFloat(style.paddingTop) || 0) - (parseFloat(style.paddingBottom) || 0);
+      if (w < 16 || h < 16) continue;
+      const drawn = w / h, natural = img.naturalWidth / img.naturalHeight;
+      if (Math.abs(drawn / natural - 1) > 0.05) {
+        push(makeIssue("distorted-image", "P2", img,
+          `Image is drawn ${Math.round(w)}×${Math.round(h)}px but its picture is ${img.naturalWidth}×${img.naturalHeight}; it is stretched (use object-fit: cover or keep its aspect ratio).`));
+      }
     }
 
     // Checks that did not report everything they found, or did not look at every control:
@@ -892,6 +1104,6 @@
   }
 
   window.__uiAudit = {
-    probe, breakpoints, stateCandidates, consentDecline, contentState, sourceFiles, domFingerprint, pageFingerprint, isTriggerVisible, layerInfo, annotate, clearAnnotations,
+    probe, viewportMeta, breakpoints, stateCandidates, consentDecline, contentState, sourceFiles, domFingerprint, pageFingerprint, isTriggerVisible, layerInfo, annotate, clearAnnotations,
   };
 })();

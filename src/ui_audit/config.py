@@ -80,6 +80,9 @@ class ViewportConfig:
     refine: bool = True
     max_refinements: int = 6
     max_captures: int = 10
+    # Widths below this are measured as a phone (meta viewport, touch, `hover: none`); 0 turns it off.
+    # Firefox cannot emulate a phone and stays a desktop browser at every width.
+    mobile_below: int = 768
     # Explicit widths replace the sweep entirely (targeted reruns).
     widths: list[int] = field(default_factory=list)
 
@@ -178,6 +181,7 @@ def validate(cfg: Config) -> None:
     _number(vp.sweep_step, "viewports.sweep_step", 1)
     _number(vp.max_refinements, "viewports.max_refinements", 0)
     _number(vp.max_captures, "viewports.max_captures", 0)
+    _number(vp.mobile_below, "viewports.mobile_below", 0)
     if not isinstance(vp.widths, list):
         raise ConfigError("viewports.widths must be a list of widths")
     for width in vp.widths:
@@ -251,6 +255,8 @@ max_width = 1920
 sweep_step = 80
 breakpoint_neighbors = true
 max_captures = 10
+# Widths below this are measured as a phone with touch; 0 measures every width as a desktop.
+mobile_below = 768
 
 [checks]
 min_target_size = 24
