@@ -59,7 +59,7 @@ jobs:
       - if: matrix.python-version == '3.12'
         run: coverage report --format=markdown >> "$GITHUB_STEP_SUMMARY"
       - if: matrix.python-version == '3.12'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage.xml
