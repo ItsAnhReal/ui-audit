@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Demo · RTL</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #1d2433; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 20px; border-bottom: 1px solid #e4e7ec; }
+  .brand { font-weight: 700; }
+  main { padding: 20px; max-width: 1100px; margin: 0 auto; }
+  /* BUG horizontal-overflow below 560px: a right-to-left page overflows to the left. */
+  .offer { width: 520px; padding: 12px; background: #ecfdf3; }
+</style></head>
+<body>
+<header>
+  <span class="brand">أكمي كلاود</span>
+  <nav class="rtl-nav"><a href="index.html">الرئيسية</a> <a href="pricing.html">الأسعار</a> <a href="dashboard.html">لوحة التحكم</a></nav>
+</header>
+<main>
+  <h1>انشر أسرع مع أكمي كلاود</h1>
+  <p>كل ما تحتاجه لنشر تطبيقاتك ومراقبتها وتوسيعها في مكان واحد، من أول سطر حتى آخر مستخدم. السجلات والتتبع والمقاييس معا، والتوسع التلقائي الذي يتبع حركة الزوار، والأسرار وتسجيل الدخول الموحد وسجلات التدقيق مدمجة من البداية.</p>
+  <div class="offer">وفر عشرين بالمئة عند الدفع السنوي لجميع الخطط.</div>
+  <p>ابدأ مجانا وادفع فقط عندما يكبر فريقك. يمكنك الترقية أو الإلغاء في أي وقت من لوحة التحكم دون الحاجة إلى التواصل مع فريق المبيعات.</p>
+</main>
+</body>
+</html>

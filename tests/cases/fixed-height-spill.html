@@ -1,0 +1,13 @@
+<!-- expect: text-spill=1 -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Fixed height</title><style>
+body { margin: 0; padding: 16px; font: 16px/1.5 sans-serif; }
+/* Room for two lines; the text needs more and runs onto the paragraph below. */
+.card { height: 48px; border: 1px solid #ccc; }
+.card + p { margin: 0; }
+/* An app root of fixed height on a longer page: its content runs on below it, over nothing. */
+.root { height: 60px; }
+</style></head><body>
+<div class="card">Every plan includes unlimited previews, custom domains, automatic certificates, rollbacks and a global edge network.</div>
+<p>Compare the plans below.</p>
+<div class="root"><p>Plan one</p><p>Plan two</p><p>Plan three</p></div>
+</body></html>

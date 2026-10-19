@@ -1,0 +1,13 @@
+<!-- expect: text-overlap=1 -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Text over text</title><style>
+body { margin: 0; padding: 16px; font: 16px/1.5 sans-serif; }
+.hero { position: relative; max-width: 900px; padding-bottom: 48px; }
+.hero h1 { margin: 0; font-size: 28px; line-height: 36px; }
+/* Placed for a one-line heading; drawn over the heading's second line wherever it wraps. */
+.hero p { position: absolute; top: 40px; left: 0; margin: 0; }
+</style></head><body>
+<section class="hero">
+  <h1>Deploy every branch to its own preview environment automatically</h1>
+  <p>No configuration needed for most frameworks.</p>
+</section>
+</body></html>

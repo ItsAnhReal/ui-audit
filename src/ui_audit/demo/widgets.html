@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Demo · Widgets</title>
+<link rel="stylesheet" href="widgets.css"></head>
+<body>
+<header>
+  <span class="brand">Acme Cloud</span>
+  <nav class="top-nav"><a href="index.html">Home</a> <a href="pricing.html">Pricing</a></nav>
+</header>
+<main>
+  <section class="hero">
+    <h1>Infrastructure that grows with your team</h1>
+    <p class="tagline">Start free, pay as you scale.</p>
+  </section>
+  <p><plan-badge class="promo"></plan-badge></p>
+  <div class="notice">Scheduled maintenance: deployments pause on Sunday from 02:00 to 04:00 UTC while we upgrade the build fleet.</div>
+  <p class="after-notice">Questions? Write to support.</p>
+  <p><button class="terms-button" aria-controls="terms">View terms</button></p>
+  <iframe class="usage" title="Usage this month" srcdoc="<!doctype html><html lang=en><head><meta charset=utf-8><style>body{margin:8px;font:16px/1.5 system-ui,sans-serif}.meter{width:480px;padding:8px;background:#eef}</style></head><body><div class=meter>Build minutes: 1,240 of 2,000 used</div></body></html>"></iframe>
+</main>
+<div id="terms" class="terms" role="dialog" aria-modal="true" aria-labelledby="terms-title" hidden>
+  <h2 id="terms-title">Terms of service</h2>
+  <p>These terms govern your use of Acme Cloud, including the dashboard, the command line tools, the build fleet and every API we offer. By creating an account you agree to them on behalf of yourself and the organisation you work for.</p>
+  <p>You keep every right to the code, data and content you deploy. You grant us only the licence we need to host, copy, transmit and display it in order to run the service for you, and that licence ends when you delete it.</p>
+  <p>Paid plans renew every month or every year until cancelled. Usage above the included build minutes, bandwidth and storage is billed at the rates on the pricing page, and invoices are due within thirty days.</p>
+  <p>We aim for 99.95% monthly availability on the Pro and Enterprise plans. When we miss it, you can claim service credits for the affected month by writing to support within thirty days of the incident.</p>
+  <p>Do not use the service to send spam, to mine cryptocurrency, to attack other systems or to host content that is illegal where you or we operate. We may suspend projects that do, after telling you why whenever we can.</p>
+  <p>Either side may end this agreement at any time. When it ends, you can export your data for thirty days; after that we delete it from our systems and backups within a further ninety days.</p>
+  <p>We may change these terms. We will tell you about material changes by email at least thirty days before they apply, and the version that applies is always the one published on this page.</p>
+  <p>These terms are governed by the laws of the place where Acme Cloud is registered, and any dispute goes to its courts unless the law where you live gives you the right to bring it there.</p>
+  <p><button class="close">Close</button></p>
+</div>
+<script>
+  // A badge as a web component; its markup and styles live in an open shadow root.
+  customElements.define("plan-badge", class extends HTMLElement {
+    constructor() {
+      super();
+      this.attachShadow({ mode: "open" }).innerHTML =
+        '<style>.label { display: inline-block; width: 90px; overflow: hidden; white-space: nowrap; vertical-align: bottom; background: #fef0c7; padding: 2px 6px; }</style>' +
+        '<span class="label">Save 20% with yearly billing</span>';
+    }
+  });
+
+  // "View terms" opens the dialog without aria-haspopup or aria-expanded; only aria-controls names it.
+  const terms = document.getElementById("terms");
+  const toggle = (open) => { terms.hidden = !open; };
+  document.querySelector(".terms-button").addEventListener("click", () => toggle(terms.hidden));
+  terms.querySelector(".close").addEventListener("click", () => toggle(false));
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape") toggle(false); });
+</script>
+</body>
+</html>

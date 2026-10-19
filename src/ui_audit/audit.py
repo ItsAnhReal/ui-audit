@@ -160,6 +160,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
     opts = _probe_opts(cfg)
 
     consent: str | None = None
+    remote_sheets: dict[str, set[int]] = {}  # stylesheet URL → its breakpoints, fetched once per run
     index = SourceIndex(Path(cfg.project_root))
     route_sources: dict[str, set[str]] = {}
 
@@ -344,7 +345,8 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                 if content["state"] != "ok":
                     log(f"{where(path)}: may not show its real content ({content['state']}: {content['detail']})")
                 measured += 1
-                breakpoints = page.evaluate("() => window.__uiAudit.breakpoints()")
+                breakpoints = sorted(set(page.evaluate("() => window.__uiAudit.breakpoints()"))
+                                     | _remote_breakpoints(page, remote_sheets))
                 all_breakpoints.update(breakpoints)
                 work = _RouteWork(route, breakpoints, set(runtime.console_errors) | set(runtime.failed_resources))
                 for message in runtime.console_errors:
@@ -442,6 +444,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                             _na.add(width)
                             return NOT_APPLICABLE
                         browser.resize(target, width, viewports.height_for(width), min(cfg.settle_ms, SWEEP_SETTLE_MS))
+                        states.rehover(target, _state, min(cfg.settle_ms, SWEEP_SETTLE_MS))
                         work.probes += 1
                         if _state.trigger and not target.evaluate("s => window.__uiAudit.isTriggerVisible(s)", _state.trigger):
                             _na.add(width)
@@ -512,7 +515,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
             errors.append(f"{browser.LABELS[engine]}: {str(exc).splitlines()[0][:200]}")
             log(f"{browser.LABELS[engine]}: not audited ({str(exc).splitlines()[0][:200]})")
 
-    issues = issue_set.all()
+    issues = issue_set.all({(s["route"], s["id"]): s["parent"] for s in state_records if s.get("parent")})
     for record in route_records:
         if record.get("status") == "audited":
             record["sources"] = sorted(s for s in route_sources.get(record["path"], ()) if not s.startswith(("/", "..")))
@@ -566,6 +569,28 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
     return result
 
 
+# Stylesheets from other origins fetched in one run, at most; most apps load one or two from a CDN.
+MAX_REMOTE_SHEETS = 10
+
+
+def _remote_breakpoints(page, cache: dict[str, set[int]]) -> set[int]:
+    """Breakpoints in the page's stylesheets from another origin that it may not read itself
+    (a CDN without CORS headers). Each is fetched once per run, with the browser's cookies."""
+    try:
+        hrefs = page.evaluate("() => window.__uiAudit.unreadableSheets()")
+    except Exception:  # noqa: BLE001 - a page that navigated away has no stylesheets to add
+        return set()
+    found: set[int] = set()
+    for href in hrefs:
+        if href not in cache:
+            if len(cache) >= MAX_REMOTE_SHEETS:
+                continue
+            text = browser.fetch_text(page, href)
+            cache[href] = set(viewports.css_breakpoints(text)) if text else set()
+        found |= cache[href]
+    return found
+
+
 def _check_viewport_meta(page, issue_set: IssueSet | _RouteWork, path: str, engine: str, plans: list, results: dict,
                          narrow_below: int) -> None:
     """Report a missing or zoom-blocking meta viewport once per route, at the narrowest width
@@ -587,6 +612,7 @@ def _capture(page, cfg: Config, shots_dir: Path, out_dir: Path, path: str, state
     if width not in results:
         probe(width)
     browser.resize(page, width, height, cfg.settle_ms)
+    states.rehover(page, state, cfg.settle_ms)
     if state.kind == "default":
         # A width the page was not scrolled at can still hold sections waiting to fade in.
         # An open menu or dialog is left alone: some close when the page scrolls.

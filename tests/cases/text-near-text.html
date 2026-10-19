@@ -1,0 +1,24 @@
+<!-- expect: clean -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Text near text</title><style>
+body { margin: 0; padding: 16px; font: 16px/1.5 sans-serif; }
+/* Tight line spacing: line boxes overlap, letters do not. */
+.tight { font-size: 40px; line-height: 0.95; max-width: 300px; }
+/* A count badge over a label. */
+.inbox { position: relative; display: inline-block; padding: 8px 24px 8px 0; }
+.count { position: absolute; top: 0; right: 0; font-size: 12px; }
+/* A pill with its own background laid over the corner of a caption. */
+.figure { position: relative; width: 260px; }
+.pill { position: absolute; top: 0; left: 0; padding: 0 6px; background: #1d2433; color: #fff; }
+/* Slides stacked in one place; only the current one is shown. */
+.slides { position: relative; height: 48px; }
+.slide { position: absolute; inset: 0; opacity: 0; }
+.slide.current { opacity: 1; }
+/* Text for screen readers only, laid over its visible label. */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+</style></head><body>
+<h1 class="tight"><span>Ship faster</span> <span>with previews</span> <span>for every branch</span></h1>
+<p><span class="inbox">Messages <span class="count">12</span></span></p>
+<div class="figure"><span class="pill">Featured story</span><p>Caption of the featured story goes here, under its label.</p></div>
+<div class="slides"><p class="slide current">First customer story</p><p class="slide">Second customer story</p><p class="slide">Third customer story</p></div>
+<p><a href="#more">Read more<span class="sr-only"> about our customer stories</span></a></p>
+</body></html>

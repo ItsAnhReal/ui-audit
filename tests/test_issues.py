@@ -28,6 +28,19 @@ def test_state_duplicates_collapse_into_default():
     assert issues.all()[0]["also_in_states"] == ["menu-open"]
 
 
+def test_a_nested_state_reports_what_its_parent_state_shows_there():
+    issues = IssueSet()
+    issues.observe(raw("dialog-too-tall", "P1", "#terms"), "/", "dialog-terms", 390)
+    issues.observe(raw("dialog-too-tall", "P1", "#terms"), "/", "expand-details", 390)
+    issues.observe(raw("tiny-text", "P3", ".fine"), "/", "expand-details", 390)
+    issues.observe(raw("tiny-text", "P3", ".fine"), "/", "default", 390)
+    result = issues.all({("/", "expand-details"): "dialog-terms"})
+    assert [(i["state"], i["check"], i["also_in_states"]) for i in result] == [
+        ("dialog-terms", "dialog-too-tall", ["expand-details"]), ("default", "tiny-text", ["expand-details"])]
+    # Without knowing the parent, both states keep their finding.
+    assert len(issues.all()) == 3
+
+
 def test_sweep_signature_ignores_width_independent_checks():
     result = {"issues": [raw(), raw("unnamed-control", "P2", "button"), raw("small-target", "P2", "a"),
                          raw("tiny-text", "P3", "p"), raw("small-input-font", "P3", "input"), raw("broken-image", "P2", "img")]}

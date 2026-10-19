@@ -1,6 +1,6 @@
 # Demo app — planted defects
 
-A four-page static site used by the end-to-end tests and by `ui-audit demo`, which serves it and audits it. Every defect is deliberate.
+A six-page static site used by the end-to-end tests and by `ui-audit demo`, which serves it and audits it. Every defect is deliberate.
 
 | Route | State | Widths | Defect | Check |
 |---|---|---|---|---|
@@ -16,5 +16,11 @@ A four-page static site used by the end-to-end tests and by `ui-audit demo`, whi
 | `/signup.html` | default | 320–~1366 | Fixed "Create account" bar hides the legal text at the end of the page | `fixed-covers-end` |
 | `/signup.html` | default | 320–767 | 14px text in the email and password fields | `small-input-font` ×2 |
 | `/signup.html` | default | all | 10px legal text; a 2:1 picture drawn square; a logo that cannot be decoded | `tiny-text`, `distorted-image`, `broken-image` |
+| `/widgets.html` | default | all | Promo text cut off at 90px inside the `plan-badge` web component's shadow root | `clipped-content` |
+| `/widgets.html` | default | 320–~540 | A 480px meter inside a same-origin iframe | `horizontal-overflow` (in the frame) |
+| `/widgets.html` | default | 320–~670 | The tagline, placed for a one-line heading, is drawn over the heading's second line | `text-overlap` |
+| `/widgets.html` | default | 320–~935 | A notice with a fixed 48px height wraps and runs onto the next paragraph | `text-spill` (P2) |
+| `/widgets.html` | terms open | 320–1366 | The fixed terms dialog, opened by a button with only `aria-controls`, is taller than the screen and does not scroll | `dialog-too-tall` (P1) |
+| `/rtl.html` | default | 320–~560 | A 520px offer box on a right-to-left page overflows to the left | `horizontal-overflow` |
 
 The 800–946 overflow is the point of the demo: the four standard presets (390, 768, 1366, 1920) miss it, the sweep finds it, and refinement pins both edges.
