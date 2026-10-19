@@ -6,13 +6,17 @@ from pathlib import Path
 UI = Path(__file__).resolve().parent.parent / "src" / "ui_audit" / "ui"
 README = Path(__file__).resolve().parent.parent / "README.md"
 
-# Keys app.js builds from data instead of spelling them out.
+# Keys the app builds from data instead of spelling them out.
 BUILT = {f"sev.{s}{suffix}" for s in ("P1", "P2", "P3") for suffix in ("", ".long")} | {
     *(f"theme.{t}" for t in ("system", "light", "dark")),
     *(f"editor.{e}" for e in ("vscode", "cursor", "windsurf", "zed", "copy")),
     *(f"na.mode.{m}{suffix}" for m in ("quick", "complete", "pages") for suffix in ("", ".help")),
     *(f"list.by.{m}{suffix}" for m in ("cause", "page") for suffix in ("", ".title")),
 }
+
+
+def app_source() -> str:
+    return "\n".join(path.read_text(encoding="utf-8") for path in sorted((UI / "app").glob("*.js")))
 
 
 def dictionaries() -> dict[str, dict[str, str]]:
@@ -26,7 +30,7 @@ def dictionaries() -> dict[str, dict[str, str]]:
 
 
 def used_keys() -> set[str]:
-    app = (UI / "app.js").read_text(encoding="utf-8")
+    app = app_source()
     keys = set(re.findall(r'\bt\("([^"]+)"', app))
     for one, many in re.findall(r'plural\([^,]+, "([^"]+)", "([^"]+)"', app):
         keys |= {one, many}
@@ -57,5 +61,5 @@ def test_every_documented_check_has_a_title_and_a_tip():
 
 
 def test_scripts_cannot_end_the_inline_script_block():
-    for name in ("app.js", "i18n.js"):
-        assert "</script" not in (UI / name).read_text(encoding="utf-8").lower()
+    for path in [UI / "i18n.js", *(UI / "app").glob("*.js")]:
+        assert "</script" not in path.read_text(encoding="utf-8").lower(), path.name

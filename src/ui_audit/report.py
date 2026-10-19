@@ -72,6 +72,20 @@ def viewer_data(report: dict) -> dict:
     return data
 
 
+# The viewer's script files in ui/app/, in the order they are joined. Each is a part of one
+# function body: later files use what earlier ones define, and main.js starts the page.
+APP_SCRIPTS = ("core.js", "text.js", "model.js", "dom.js", "state.js", "shell.js", "home.js", "new-audit.js",
+               "run.js", "findings.js", "detail.js", "compare.js", "main.js")
+
+
+def app_script(names: tuple[str, ...] = APP_SCRIPTS, tail: str = "") -> str:
+    """The viewer's script: the files joined inside one function, so they share a scope
+    without a module loader (the static report opens from file://). `tail` runs last, inside."""
+    folder = resources.files("ui_audit").joinpath("ui", "app")
+    body = "\n".join(f"// ---- {name}\n{folder.joinpath(name).read_text(encoding='utf-8')}" for name in names)
+    return f'(() => {{\n"use strict";\n{body}\n{tail}\n}})();\n'
+
+
 def page(report: dict | None = None, app: dict | None = None) -> str:
     """The viewer as one self-contained page. Given report data it is the static report a
     run leaves behind; given app settings it is `ui-audit ui`, which loads runs from its server."""
@@ -83,7 +97,7 @@ def page(report: dict | None = None, app: dict | None = None) -> str:
 
     parts = {
         "/*__STYLE__*/": ui.joinpath("app.css").read_text(encoding="utf-8"),
-        "/*__SCRIPT__*/": ui.joinpath("i18n.js").read_text(encoding="utf-8") + "\n" + ui.joinpath("app.js").read_text(encoding="utf-8"),
+        "/*__SCRIPT__*/": ui.joinpath("i18n.js").read_text(encoding="utf-8") + "\n" + app_script(),
         "__REPORT_DATA__": inline(report),
         "__APP_CONFIG__": inline(app),
     }
