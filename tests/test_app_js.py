@@ -47,7 +47,28 @@ def test_messages_are_translated_from_their_key_and_values():
     assert result["extends"] == "Reicht bis 900 px bei 390 px Fensterbreite, die Seite scrollt dadurch 510 px seitlich."
     assert result["cut"] == "Bedienelement wird bei 390 px Fensterbreite am linken Rand abgeschnitten."
     # anything the app cannot translate whole keeps the English the probe wrote
-    assert result["unknown"] == result["nestedUnknown"] == result["old"] == result["agent"] == issue["message"]
+    assert result["unknown"] == result["nestedUnknown"] == result["agent"] == issue["message"]
+    # a run from before message_key: the known English sentence is recognised instead
+    assert result["old"] == result["extends"]
+
+
+def test_findings_from_runs_before_message_keys_are_still_translated():
+    old = [
+        {"check": "horizontal-overflow", "message": "Extends to 900px in a 390px viewport (page scrolls sideways by 510px)."},
+        {"check": "horizontal-overflow", "message": "Page is 900px wide in a 390px viewport."},
+        {"check": "offscreen-control", "message": "Control is cut off at the right edge of a 390px viewport."},
+        {"check": "text-overflow", "message": 'Text spills 12px outside its box: "Bestellen"'},
+        {"check": "unnamed-control", "message": "button has no accessible name."},
+        {"check": "horizontal-overflow", "message": "Something this version never wrote."},
+        {"check": "console-error", "message": "Page is 900px wide in a 390px viewport."},
+    ]
+    result = run_js(f"return {json.dumps(old)}.map(messageText);", lang="de")
+    assert result[0] == "Reicht bis 900 px bei 390 px Fensterbreite, die Seite scrollt dadurch 510 px seitlich."
+    assert result[2] == "Bedienelement wird bei 390 px Fensterbreite am rechten Rand abgeschnitten."
+    for text, finding in zip(result[:5], old[:5]):
+        assert text != finding["message"], finding
+    # unknown sentences and runtime errors keep their English
+    assert result[5] == old[5]["message"] and result[6] == old[6]["message"]
 
 
 def test_content_details_and_errors_use_their_codes():
@@ -61,7 +82,7 @@ def test_content_details_and_errors_use_their_codes():
         job: jobError({ error: "the audit stopped (exit code 3); see the log", error_code: "auditStopped", error_params: { exit: 3 } }, "?"),
       };""", lang="de")
     assert result["thin"] == "1.234 Zeichen Text, 1 Bedienelemente"
-    assert result["old"] == "12 characters of text, 1 control"
+    assert result["old"] == "12 Zeichen Text, 1 Bedienelemente"  # a run from before detail_key
     assert result["known"] == "Es gibt keinen Lauf namens x. Vielleicht wurde er gelöscht."
     assert result["unknown"] == "something new" and result["missing"] == "raw text"
     assert result["job"] == "Die Prüfung wurde beendet (Exit-Code 3). Das Log nennt den Grund."
