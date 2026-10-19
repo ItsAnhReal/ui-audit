@@ -69,6 +69,17 @@ function icon(name, cls) {
   return svg;
 }
 
+// A file to save, made in the page: works in the app and in a report opened from disk.
+function download(name, text, type) {
+  const url = URL.createObjectURL(new Blob([text], { type: `${type};charset=utf-8` }));
+  const a = h("a", { href: url, download: name, hidden: true });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast("good", t("toast.saved", { file: name }));
+}
+
 async function copy(text, message) {
   try {
     await navigator.clipboard.writeText(text);

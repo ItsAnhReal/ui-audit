@@ -6,15 +6,20 @@ function parseHash() {
   const raw = location.hash.replace(/^#\/?/, "");
   const [path, query = ""] = raw.split("?");
   const parts = path.split("/").filter(Boolean).map((p) => { try { return decodeURIComponent(p); } catch (_) { return p; } });
-  const f = new URLSearchParams(query).get("f");
-  if (!IS_APP) return { view: "run", run: "", tab: parts[0] || "findings", f };
-  if (parts[0] === "run" && parts[1]) return { view: "run", run: parts[1], tab: parts[2] || "findings", f };
+  const params = new URLSearchParams(query);
+  const f = params.get("f");
+  const found = FILTER_KEYS.filter((key) => params.has(key));
+  const filters = found.length ? Object.fromEntries(found.map((key) => [key, params.get(key)])) : null;
+  if (!IS_APP) return { view: "run", run: "", tab: parts[0] || "findings", f, filters };
+  if (parts[0] === "run" && parts[1]) return { view: "run", run: parts[1], tab: parts[2] || "findings", f, filters };
   if (parts[0] === "compare") return { view: "compare", base: parts[1] || "", current: parts[2] || "" };
   return { view: "home" };
 }
 function link(route) {
   if (route.view === "run") {
-    const query = route.f ? `?f=${enc(route.f)}` : "";
+    const params = new URLSearchParams(route.f ? { f: route.f } : {});
+    for (const [key, value] of Object.entries(route.filters || {})) params.set(key, value);
+    const query = params.toString() ? `?${params}` : "";
     const tab = route.tab && route.tab !== "findings" ? route.tab : "";
     if (!IS_APP) return `#/${tab || "findings"}${query}`;
     return `#/run/${enc(route.run)}${tab ? "/" + tab : ""}${query}`;
@@ -104,7 +109,7 @@ async function render(force) {
     if (S.page) S.page.key = key;
   } catch (error) {
     root.replaceChildren(topbar(null), h("main", { class: "main" }, h("div", { class: "card" },
-      emptyState("alert", t("error.title"), error.message, IS_APP ? h("a", { class: "btn", href: "#/" }, t("nav.allRuns")) : null))));
+      emptyState("alert", t("error.title"), errorText(error), IS_APP ? h("a", { class: "btn", href: "#/" }, t("nav.allRuns")) : null))));
   }
   root.removeAttribute("aria-busy");
   updateJobPill();

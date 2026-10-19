@@ -3,6 +3,9 @@
 // ----- findings tab
 
 function findingsTab(model, route, vs, body) {
+  if (route.filters) Object.assign(vs, readFilters(route.filters));  // a shared link sets the filters
+  // the URL carries the selection and the filters, so a filtered view can be shared or bookmarked
+  const syncUrl = () => history.replaceState(null, "", link({ view: "run", run: route.run, f: route.f, filters: filterQuery(vs) }));
   const search = h("input", { type: "search", placeholder: t("list.searchShort"), "aria-label": t("list.search"), title: t("list.search"), value: vs.text });
   const modeSeg = h("div", { class: "seg", role: "group", "aria-label": t("list.groupBy") },
     ["cause", "page"].map((mode) => h("button", { "data-mode": mode, "aria-pressed": String(vs.mode === mode), title: t(`list.by.${mode}.title`), onClick: () => {
@@ -12,7 +15,7 @@ function findingsTab(model, route, vs, body) {
       if (item && mode === "page" && f && f.startsWith("g:")) f = `i:${item.issues[0].id}`;
       if (item && mode === "cause" && f && f.startsWith("i:")) { const issue = model.byId.get(f.slice(2)); f = issue ? `g:${issue.group || issue.id}` : null; }
       route.f = f;
-      history.replaceState(null, "", link({ view: "run", run: route.run, f }));
+      syncUrl();
       drawList(); drawDetail();
       list.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
     } }, t(`list.by.${mode}`))));
@@ -34,7 +37,9 @@ function findingsTab(model, route, vs, body) {
   const split = h("div", { class: "split" },
     h("div", { class: "list-pane" },
       h("div", { class: "list-tools" },
-        h("div", { class: "row" }, h("label", { class: "search" }, icon("search"), search), modeSeg),
+        h("div", { class: "row" }, h("label", { class: "search" }, icon("search"), search), modeSeg,
+          h("button", { class: "btn ghost icon sm", "aria-label": t("list.actions"), title: t("list.actions"), "aria-haspopup": "menu", "aria-expanded": "false",
+            onClick: (e) => listMenu(e.currentTarget) }, icon("more"))),
         h("div", { class: "row wrap" }, sevChips, acceptedChip),
         h("div", { class: "row selects" }, routeSelect, checkSelect),
         chartBox, metaLine),
@@ -48,6 +53,24 @@ function findingsTab(model, route, vs, body) {
   fitHeight();
 
   let items = [];
+  // What to do with every finding the filters show: copy, export, accept.
+  function listMenu(anchor) {
+    const shown = items.flatMap((item) => item.issues);
+    const none = !shown.length;
+    const file = `ui-audit-${(model.name || (model.data.output_dir || "").split("/").filter(Boolean).pop() || "report").replace(/[^\w.-]+/g, "-")}`;
+    menu(anchor, [
+      { head: plural(shown.length, "list.findings.one", "list.findings.many") },
+      { icon: "spark", label: t("list.copyPrompts"), disabled: none,
+        run: () => copy(items.map((item) => fixPrompt(model, item, item.issues[0])).join("\n\n---\n\n"), plural(items.length, "toast.promptsCopied.one", "toast.promptsCopied.many")) },
+      { icon: "file", label: t("list.exportCsv"), disabled: none, run: () => download(`${file}.csv`, findingsCsv(shown), "text/csv") },
+      { icon: "file", label: t("list.exportMarkdown"), disabled: none, run: () => download(`${file}.md`, findingsMarkdown(model, shown), "text/markdown") },
+      { icon: "copy", label: t("list.copyLink"), run: () => copy(location.href, t("toast.linkCopied")) },
+      vs.accepted || none ? null : "sep",
+      vs.accepted || none ? null : IS_APP
+        ? { icon: "checkCircle", label: plural(shown.length, "list.acceptAll.one", "list.acceptAll.many"), run: () => bulkAccept(model, shown, () => reloadModel(null)) }
+        : model.data.accept_command ? { icon: "checkCircle", label: plural(shown.length, "list.copyAcceptAll.one", "list.copyAcceptAll.many"), run: () => copy(acceptCommand(model, shown.map((i) => i.id).join(" ")), t("toast.commandCopied")) } : null,
+    ]);
+  }
   const matches = (i, ignoreWidth) => {
     if (!!i.accepted !== vs.accepted) return false;
     if (vs.sev.size && !vs.sev.has(i.severity)) return false;
@@ -136,6 +159,7 @@ function findingsTab(model, route, vs, body) {
       causeCount < shown ? ` · ${plural(causeCount, "unit.causes.one", "unit.causes.many")}` : ""),
     vs.width !== null ? h("button", { class: "chip clear", onClick: () => { vs.width = null; drawList(); } }, t("list.atWidth", { w: vs.width }), icon("x")) : h("span", { class: "cap", text: t("chart.title") }));
     drawChart();
+    syncUrl();
   }
   const filtered = () => !!(vs.sev.size || vs.route || vs.check || vs.text || vs.width !== null);
   function clearFilters() {
@@ -163,7 +187,7 @@ function findingsTab(model, route, vs, body) {
   }
   function select(key, focusList) {
     route.f = key;
-    history.replaceState(null, "", link({ view: "run", run: route.run, f: key }));
+    syncUrl();
     for (const node of list.querySelectorAll(".item")) { node.setAttribute("aria-selected", String(node.dataset.key === key)); node.tabIndex = node.dataset.key === key ? 0 : -1; }
     const node = list.querySelector(`[data-key="${CSS.escape(key)}"]`);
     if (node) { node.scrollIntoView({ block: "nearest" }); if (focusList) node.focus({ preventScroll: true }); }
@@ -195,7 +219,15 @@ function findingsTab(model, route, vs, body) {
       hidden: !items.some((i) => i.key === item.key),
       clear: clearFilters,
       placesShown,
-      back: () => { route.f = null; history.replaceState(null, "", link({ view: "run", run: route.run })); split.classList.remove("has-detail"); drawList(); },
+      back: () => { route.f = null; syncUrl(); split.classList.remove("has-detail"); drawList(); },
+      position: { at: items.findIndex((i) => i.key === item.key), total: items.length },
+      step: (by) => {
+        step(by);
+        // the same button again; at the end of the list the other one
+        const [prev, next] = [".detail-nav .prev", ".detail-nav .next"].map((sel) => detail.querySelector(sel));
+        const order = by < 0 ? [prev, next] : [next, prev];
+        (order.find((button) => button && !button.disabled) || detail.querySelector(".detail-nav .back"))?.focus({ preventScroll: true });
+      },
       changed: async (nextKey) => { await reloadModel(nextKey); },
       redraw: () => drawDetail(),
     }));
@@ -212,7 +244,7 @@ function findingsTab(model, route, vs, body) {
     const fresh = await loadRun(route.run);
     Object.assign(model, fresh);
     route.f = nextKey === undefined ? route.f : nextKey;
-    history.replaceState(null, "", link({ view: "run", run: route.run, f: route.f }));
+    syncUrl();
     drawList(); drawDetail();
     root.querySelector(".run-head .head-counts")?.replaceWith(headCounts(model));
   }
@@ -236,19 +268,23 @@ function findingsTab(model, route, vs, body) {
     if (event.key === "ArrowDown" || (letters && event.key === "j")) { event.preventDefault(); step(1); }
     else if (event.key === "ArrowUp" || (letters && event.key === "k")) { event.preventDefault(); step(-1); }
     else if (event.key === "ArrowRight" || event.key === "ArrowLeft") { const pick = detail.querySelector(".widths"); if (pick) { event.preventDefault(); pick.dispatchEvent(new CustomEvent("step", { detail: event.key === "ArrowRight" ? 1 : -1 })); } }
-    else if (event.key === "Escape" && route.f) { route.f = null; history.replaceState(null, "", link({ view: "run", run: route.run })); drawList(); drawDetail(); }
+    else if (event.key === "Escape" && route.f) { route.f = null; syncUrl(); drawList(); drawDetail(); }
   };
   document.addEventListener("keydown", onKey);
   window.addEventListener("resize", fitHeight);
 
   drawList();
-  if (!route.f && items.length && !window.matchMedia("(max-width: 860px)").matches) route.f = items[0].key, history.replaceState(null, "", link({ view: "run", run: route.run, f: route.f }));
+  if (!route.f && items.length && !window.matchMedia("(max-width: 860px)").matches) route.f = items[0].key;
   drawList();
   drawDetail();
   const selected = list.querySelector('[aria-selected="true"]');
   if (selected) selected.scrollIntoView({ block: "nearest" });
   return {
-    update(next) { if (next.f !== route.f) { route.f = next.f; drawList(); drawDetail(); } },
+    update(next) {
+      // filters typed into the address bar: draw the tab again with them
+      if (next.filters && JSON.stringify(next.filters) !== JSON.stringify(filterQuery(vs))) { render(true); return; }
+      if (next.f !== route.f) { route.f = next.f; drawList(); drawDetail(); }
+    },
     onState() { const box = detail.querySelector("[data-recheck]"); if (box) box.dispatchEvent(new CustomEvent("refresh")); },
     unmount() { document.removeEventListener("keydown", onKey); window.removeEventListener("resize", fitHeight); },
   };

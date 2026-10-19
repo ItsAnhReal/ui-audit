@@ -77,7 +77,7 @@ function runHeader(model, name, actions) {
     meta.push(h("button", { class: "badge warn as-btn", "aria-haspopup": "true", "aria-expanded": "false", onClick: (e) => menu(e.currentTarget, [
       { head: plural(doubtful.length, "notice.doubtful.one", "notice.doubtful.many") },
       { node: h("div", { class: "menu-note" }, h("p", { text: t("notice.doubtful.text") }), h("ul", {}, doubtful.map((r) => h("li", {}, h("code", { text: r.path }), " ",
-        known(`content.${r.content.state}`, r.content.state), r.content.detail ? h("span", { class: "dim", text: ` · ${contentDetail(r.content.detail)}` }) : "")))) },
+        known(`content.${r.content.state}`, r.content.state), r.content.detail ? h("span", { class: "dim", text: ` · ${contentDetail(r.content)}` }) : "")))) },
     ]) }, icon("alert"), plural(doubtful.length, "tag.doubtful.one", "tag.doubtful.many")));
   }
   return h("div", { class: "run-head" },
@@ -114,7 +114,7 @@ function pagesTab(model, route, vs, body) {
     const names = states.map((s) => stateLabel(model, r.path, s.id));
     let result;
     if (!ok) result = r.loaded === false ? badge(t("pages.notLoaded"), "bad") : h("span", { class: "dim", text: t("pages.skipped", { why: skipText((r.status || "").replace(/^skipped: /, "")) }) });
-    else if (r.content && r.content.state !== "ok") result = badge(known(`content.${r.content.state}`, r.content.state), "warn", "alert", contentDetail(r.content.detail || ""));
+    else if (r.content && r.content.state !== "ok") result = badge(known(`content.${r.content.state}`, r.content.state), "warn", "alert", contentDetail(r.content));
     else result = badge(t("pages.measured"), "good", "check");
     return h("tr", {},
       h("td", {}, ok && issues.length ? h("a", { class: "path", href: link({ view: "run", run: route.run }), onClick: (e) => { e.preventDefault(); vs.route = r.path; vs.mode = "page"; go({ view: "run", run: route.run }); } }, r.path) : h("span", { class: "path", text: r.path })),

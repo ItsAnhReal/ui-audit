@@ -19,7 +19,14 @@ function findingDetail(model, item, vs, hooks) {
     first.accepted ? badge(t("detail.acceptedBadge"), "good", "check") : null,
     onlyIn(model, issue) ? badge(t("detail.onlyIn", { browsers: onlyIn(model, issue).map(browserName).join(", ") }), "accent", "info", t("detail.onlyIn.title")) : null,
     pageCount > 1 ? badge(plural(pageCount, "detail.onPages.one", "detail.onPages.many"), "accent", "layers") : all.length > 1 ? badge(t("detail.places", { n: all.length }), "accent", "layers") : null);
-  node.append(h("button", { class: "btn sm ghost back", onClick: hooks.back }, icon("left"), t("detail.back")));
+  // on a phone the list is hidden behind the detail: back to it, or on to the previous or next finding
+  const { at, total } = hooks.position || { at: -1, total: 0 };
+  node.append(h("div", { class: "detail-nav" }, h("button", { class: "btn sm ghost back", onClick: hooks.back }, icon("left"), t("detail.back")),
+    at >= 0 && total > 1 ? [
+      h("span", { class: "pos", text: t("detail.position", { n: fmt.n(at + 1), total: fmt.n(total) }) }),
+      h("button", { class: "btn sm icon prev", "aria-label": t("detail.prev"), title: t("detail.prev"), disabled: at === 0, onClick: () => hooks.step(-1) }, icon("left")),
+      h("button", { class: "btn sm icon next", "aria-label": t("detail.next"), title: t("detail.next"), disabled: at === total - 1, onClick: () => hooks.step(1) }, icon("right")),
+    ] : null));
   if (hooks.hidden) {
     node.append(h("div", { class: "notice slim" }, icon("info"), h("div", { class: "grow", text: t("detail.hidden") }),
       h("button", { class: "btn sm", onClick: hooks.clear }, t("list.clear"))));
@@ -36,8 +43,9 @@ function findingDetail(model, item, vs, hooks) {
     if (first.accepted) actions.append(h("button", { class: "btn", onClick: () => unaccept(model, item, hooks) }, icon("undo"), t("detail.unaccept")));
     else actions.append(h("button", { class: "btn", "aria-expanded": String(vs.accepting === item.key), onClick: () => { vs.accepting = vs.accepting === item.key ? null : item.key; hooks.redraw(); } }, icon("checkCircle"), t("detail.accept")));
   } else {
-    actions.append(h("button", { class: "btn", onClick: () => copy(recheckCommand(model, all), t("toast.commandCopied")) }, icon("recheck"), t("detail.copyRecheck")));
-    if (!first.accepted) actions.append(h("button", { class: "btn", onClick: () => copy(`ui-audit accept ${shellQuote(runDir(model).replace(/\/$/, ""))} ${shellQuote(groupId || issue.id)} --reason "why this is fine"`, t("toast.commandCopied")) }, icon("checkCircle"), t("detail.copyAccept")));
+    const recheck = recheckCommand(model, all);
+    if (recheck) actions.append(h("button", { class: "btn", onClick: () => copy(recheck, t("toast.commandCopied")) }, icon("recheck"), t("detail.copyRecheck")));
+    if (!first.accepted && model.data.accept_command) actions.append(h("button", { class: "btn", onClick: () => copy(acceptCommand(model, groupId || issue.id), t("toast.commandCopied")) }, icon("checkCircle"), t("detail.copyAccept")));
   }
   node.append(actions);
   if (IS_APP && vs.accepting === item.key && !first.accepted) node.append(acceptForm(model, item, groupId || issue.id, vs, hooks));
@@ -192,7 +200,7 @@ function acceptForm(model, item, id, vs, hooks) {
       vs.accepting = null;
       toast("good", t("toast.accepted"), { label: t("action.undo"), run: () => unaccept(model, item, hooks) });
       await hooks.changed("next");
-    } catch (error) { toast("bad", error.message); submit.disabled = false; }
+    } catch (error) { toast("bad", errorText(error)); submit.disabled = false; }
   } }, h("div", { class: "help", text: t("accept.help") }), reason,
   h("div", { class: "row" }, h("button", { type: "button", class: "btn sm", onClick: () => { vs.accepting = null; hooks.redraw(); } }, t("action.cancel")), submit));
   setTimeout(() => reason.focus(), 0);
@@ -203,7 +211,34 @@ async function unaccept(model, item, hooks) {
     await api(`runs/${enc(model.name)}/unaccept`, { ids: item.all.map((i) => i.id) });
     toast("good", t("toast.unaccepted"));
     await hooks.changed();
-  } catch (error) { toast("bad", error.message); }
+  } catch (error) { toast("bad", errorText(error)); }
+}
+
+// Accept every finding a filtered list shows, with one reason. The server takes 500 ids a call.
+async function sendIds(model, action, ids, extra) {
+  for (let n = 0; n < ids.length; n += 500) await api(`runs/${enc(model.name)}/${action}`, { ids: ids.slice(n, n + 500), ...extra });
+}
+function bulkAccept(model, issues, changed) {
+  const ids = issues.map((i) => i.id);
+  const reason = h("textarea", { rows: "3", placeholder: t("accept.placeholder"), "aria-label": t("accept.reason") });
+  const submit = h("button", { class: "btn primary", type: "submit" }, icon("check"), plural(ids.length, "accept.bulk.one", "accept.bulk.many"));
+  const form = h("form", { style: { display: "contents" }, onSubmit: async (event) => {
+    event.preventDefault();
+    if (!reason.value.trim()) { reason.focus(); return; }
+    submit.disabled = true;
+    try {
+      await sendIds(model, "accept", ids, { reason: reason.value.trim() });
+      dialog.close();
+      toast("good", plural(ids.length, "toast.acceptedN.one", "toast.acceptedN.many"), { label: t("action.undo"), run: async () => {
+        try { await sendIds(model, "unaccept", ids); toast("good", t("toast.unaccepted")); await changed(); } catch (error) { toast("bad", errorText(error)); }
+      } });
+      await changed();
+    } catch (error) { toast("bad", errorText(error)); submit.disabled = false; }
+  } },
+  h("div", { class: "body" }, h("h2", { text: t("accept.bulk.title") }), h("p", { text: t("accept.help") }), reason),
+  h("div", { class: "foot" }, h("button", { type: "button", class: "btn", onClick: () => dialog.close() }, t("action.cancel")), submit));
+  const dialog = modal(form);
+  reason.focus();
 }
 
 async function startRecheck(model, item) {
@@ -211,7 +246,7 @@ async function startRecheck(model, item) {
     await api(`runs/${enc(model.name)}/recheck`, { ids: item.all.map((i) => i.id) });
     askNotify();
     await refreshState();
-  } catch (error) { toast("bad", error.message); }
+  } catch (error) { toast("bad", errorText(error)); }
 }
 function recheckBox(model, ids, button) {
   const box = h("div", { "data-recheck": "1" });
@@ -231,7 +266,7 @@ function recheckBox(model, ids, button) {
       return;
     }
     if (job.status === "failed") {
-      box.append(h("div", { class: "recheck-box bad" }, icon("alert"), h("div", { class: "grow" }, h("b", { text: t("recheck.failed") }), h("div", { class: "muted", text: job.error || "" })),
+      box.append(h("div", { class: "recheck-box bad" }, icon("alert"), h("div", { class: "grow" }, h("b", { text: t("recheck.failed") }), h("div", { class: "muted", text: jobError(job, "") })),
         h("a", { class: "btn sm", href: "#/" }, t("recheck.log"))));
       return;
     }

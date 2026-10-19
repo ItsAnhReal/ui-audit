@@ -16,14 +16,28 @@ function homeView() {
     const st = S.state;
     const cfg = st.config || {};
     const reach = h("span", { class: "status-dot wait", text: t("home.checking") });
-    if (cfg.base_url) checkReach(cfg.base_url).then((r) => {
-      reach.className = `status-dot ${r.ok ? "ok" : "bad"}`;
-      reach.textContent = r.ok ? t("home.reachable") : t("home.unreachable");
-      reach.title = r.detail || "";
-    });
+    let address = null;
+    if (cfg.path && cfg.base_url) {
+      address = [h("span", { class: "mono", text: cfg.base_url }), " ", reach, " · "];
+      checkReach(cfg.base_url).then((r) => {
+        reach.className = `status-dot ${r.ok ? "ok" : "bad"}`;
+        reach.textContent = r.ok ? t("home.reachable") : t("home.unreachable");
+        reach.title = r.detail || "";
+      });
+    } else if (!cfg.path) {
+      // No settings file, so no address of its own: the built-in default would only show up as unreachable.
+      address = [h("span", { class: "found" }, h("span", { class: "status-dot wait", text: t("home.noAddress") })), " · "];
+      discover().then(({ found, ports }) => {
+        const box = address[0];
+        if (!box.isConnected) return;
+        box.replaceChildren(found.length
+          ? [t("home.found"), " ", found.map((url) => h("button", { class: "chip mono", title: t("home.useFound"), onClick: () => newAuditSheet({ base_url: url }) }, url))]
+          : h("span", { class: "status-dot", text: t("home.noneFound", { ports: ports.join(", ") }) }));
+      });
+    }
     return h("div", { class: "page-head" },
       h("div", {}, h("h1", { text: st.project }),
-        h("p", {}, cfg.base_url ? [h("span", { class: "mono", text: cfg.base_url }), " ", reach, " · "] : null,
+        h("p", {}, address,
           t("home.runsIn", { dir: st.runs_dir }), cfg.path ? ` · ${t("home.settings", { file: cfg.path })}` : ` · ${t("home.noSettings")}`)),
       h("div", { class: "actions" }, h("button", { class: "btn primary lg", onClick: () => newAuditSheet() }, icon("plus"), t("action.newAudit"))));
   }
@@ -150,7 +164,7 @@ function jobCard() {
   const node = h("section", { class: "card job" });
   const logBox = h("pre", { class: "log" });
   const details = h("details", {}, h("summary", { text: t("job.log") }), logBox);
-  let built = false;
+  let built = false, logShown = null;
   const parts = {};
   function build() {
     parts.icon = h("div", { class: "state-icon" });
@@ -176,7 +190,7 @@ function jobCard() {
     if (queued) sub = t("job.waiting");
     else if (running) sub = p.route ? t("job.page", { n: fmt.n(Math.min(p.measured, p.expected || p.measured)), total: fmt.n(p.expected || p.measured), route: p.route }) : p.scope || t("job.preparing");
     else if (job.status === "done") sub = job.result && job.result.empty ? t("job.nothing") : t("job.doneSub", { counts: SEVS.map((s) => `${(job.result.counts || {})[s] || 0} ${s}`).join(" · "), took: fmt.dur(elapsed) });
-    else if (job.status === "failed") sub = job.error || t("job.failed");
+    else if (job.status === "failed") sub = jobError(job, t("job.failed"));
     else if (job.status === "cancelled") sub = t("job.cancelled");
     parts.sub.textContent = sub;
     parts.sub.title = sub;
@@ -199,9 +213,15 @@ function jobCard() {
       if (p.skipped) stats.push(plural(p.skipped, "job.skipped.one", "job.skipped.many"));
     }
     parts.stats.replaceChildren(...stats.map((s) => h("span", { text: s })));
-    const stick = logBox.scrollTop + logBox.clientHeight >= logBox.scrollHeight - 8;
-    logBox.textContent = (job.log || []).join("\n") || t("job.noLog");
-    if (stick) logBox.scrollTop = logBox.scrollHeight;
+    // only new lines are appended, so text selected in the log stays selected while the run goes on
+    const fresh = logLines(logShown, job);
+    if (fresh.reset || fresh.lines.length) {
+      const stick = logBox.scrollTop + logBox.clientHeight >= logBox.scrollHeight - 8;
+      if (fresh.reset) logBox.textContent = fresh.lines.join("\n") || t("job.noLog");
+      else logBox.append("\n" + fresh.lines.join("\n"));
+      if (stick) logBox.scrollTop = logBox.scrollHeight;
+    }
+    logShown = fresh.total;
     if (job.status === "failed" && !details.dataset.opened) { details.open = true; details.dataset.opened = "1"; }
   }
   return { node, update };

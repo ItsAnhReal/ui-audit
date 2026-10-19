@@ -140,6 +140,9 @@ class IssueSet:
                 "browsers": [],
                 "widths_by_browser": {},
             }
+            if raw.get("message_key"):  # so the app can show the message in its own language
+                issue["message_key"] = raw["message_key"]
+                issue["message_params"] = raw.get("message_params") or {}
             self._issues[sig] = issue
         measured = self._measured[sig] = worst(self._measured.get(sig, raw["severity"]), raw["severity"])
         if width not in issue["widths"]:

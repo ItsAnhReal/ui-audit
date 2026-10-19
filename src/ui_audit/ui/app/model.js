@@ -122,29 +122,26 @@ function zoomCrop(rects, W, H, frameWidth) {
   return { x: clamp((x0 + x1) / 2 - w / 2, W - w), y: clamp((y0 + y1) / 2 - ht / 2, H - ht), width: w, height: ht };
 }
 
-function recheckWidths(issues, low, high, limit = 14) {
-  const edges = new Set(), middles = new Set();
-  for (const issue of issues) {
-    const seen = (issue.widths || []).slice().sort((a, b) => a - b);
-    if (!seen.length) continue;
-    for (const w of [seen[0], seen[seen.length - 1], seen[0] - 1, seen[seen.length - 1] + 1]) edges.add(w);
-    middles.add(seen[Math.floor(seen.length / 2)]);
-  }
-  const inRange = (w) => w >= low && w <= high;
-  const widths = [...new Set([...edges, ...middles])].filter(inRange).sort((a, b) => a - b);
-  if (widths.length <= limit) return widths;
-  let kept = [...edges].filter(inRange).sort((a, b) => a - b);
-  if (kept.length > limit) { const step = kept.length / limit; kept = Array.from({ length: limit }, (_, n) => kept[Math.floor(n * step)]); }
-  return kept;
+// The targeted rerun for these findings, as report.py worked it out (summary.recheck_command):
+// a whole cause, or one finding of a larger one. Null for a set it has no command for.
+function recheckCommand(model, issues) {
+  if (!issues.length) return null;
+  if (issues.length === 1 && issues[0].recheck) return issues[0].recheck;
+  const group = model.groups.get(issues[0].group || issues[0].id);
+  const same = group && group.issues.length === issues.length && issues.every((i) => (i.group || i.id) === group.id);
+  return same && group.info && group.info.recheck ? group.info.recheck : null;
+}
+// What a job's log box adds: the lines logged since `shown` lines were drawn, or the whole tail
+// again when nothing was drawn yet or more lines came than the tail the server sends holds.
+function logLines(shown, job) {
+  const lines = job.log || [], total = job.log_count ?? lines.length;
+  if (shown !== null && shown === total) return { reset: false, lines: [], total };
+  if (!shown || total < shown || total - shown > lines.length) return { reset: true, lines, total };
+  return { reset: false, lines: lines.slice(lines.length - (total - shown)), total };
 }
 
-function recheckCommand(model, issues) {
-  const dir = runDir(model).replace(/\/$/, "");
-  const out = `${dir}-recheck`;
-  const routes = [...new Set(issues.map((i) => i.route))].map((r) => `--route ${shellQuote(r)}`).join(" ");
-  const widths = recheckWidths(issues, model.LO, model.HI).join(",");
-  const states = issues.every((i) => i.state === "default") ? " --no-states" : "";
-  return `ui-audit audit --like ${shellQuote(dir)} ${routes} --width ${widths}${states} --output ${shellQuote(out)}\nui-audit verify ${shellQuote(dir)} ${shellQuote(out)}`;
+function acceptCommand(model, id) {
+  return (model.data.accept_command || "").replace("{id}", id);
 }
 function fixPrompt(model, item, issue) {
   const all = item.all || item.issues;
@@ -164,6 +161,67 @@ function fixPrompt(model, item, issue) {
   if (sources.length) lines.push(`Likely source (search hints, confirm before editing): ${sources.map((c) => (c.line ? `${c.file}:${c.line}` : c.file)).join(", ")}`);
   const capture = bestCapture(model, issue);
   if (capture && !RUNTIME_CHECKS.has(issue.check)) lines.push(`Screenshot: ${absPath(model, capture.file)}`);
-  lines.push("", `Hint: ${I18N.tip(issue.check, "en")}`, "", "When the fix is in, prove it with a targeted rerun and compare:", recheckCommand(model, all));
+  lines.push("", `Hint: ${I18N.tip(issue.check, "en")}`);
+  const recheck = recheckCommand(model, all);
+  if (recheck) lines.push("", "When the fix is in, prove it with a targeted rerun and compare:", recheck);
   return lines.join("\n");
+}
+
+// The findings filters as values in the URL, so a filtered view can be shared, and back. A value
+// left at its default is left out; a link with any of them sets all of them.
+const FILTER_KEYS = ["sev", "page", "check", "q", "w", "accepted", "by"];
+function filterQuery(vs) {
+  const out = {};
+  if (vs.sev.size) out.sev = SEVS.filter((s) => vs.sev.has(s)).join(",");
+  if (vs.route) out.page = vs.route;
+  if (vs.check) out.check = vs.check;
+  if (vs.text) out.q = vs.text;
+  if (vs.width !== null) out.w = String(vs.width);
+  if (vs.accepted) out.accepted = "1";
+  if (vs.mode === "page") out.by = "page";
+  return out;
+}
+function readFilters(query) {
+  const width = /^\d{1,5}$/.test(query.w || "") ? Number(query.w) : null;
+  return {
+    sev: new Set(String(query.sev || "").split(",").filter((s) => SEVS.includes(s))),
+    route: query.page || "", check: query.check || "", text: String(query.q || "").trim().toLowerCase(), width,
+    accepted: query.accepted === "1", mode: query.by === "page" ? "page" : "cause",
+  };
+}
+
+// Exports of the findings a view shows, in English like report.json: one row per finding.
+function exportRows(issues) {
+  return issues.map((i) => {
+    const source = (i.source_candidates || [])[0];
+    const runtime = RUNTIME_CHECKS.has(i.check);
+    return {
+      id: i.id, severity: i.severity, check: i.check, page: i.route, state: i.state,
+      widths: runtime || lo(i) === undefined ? "" : lo(i) === hi(i) ? String(lo(i)) : `${lo(i)}-${hi(i)}`,
+      element: runtime ? "" : i.selector || "", message: i.message || "",
+      source: source ? (source.line ? `${source.file}:${source.line}` : source.file) : "",
+      accepted: i.accepted ? i.accepted.reason || "yes" : "", origin: i.origin || "deterministic",
+    };
+  });
+}
+function findingsCsv(issues) {
+  const columns = ["id", "severity", "check", "page", "state", "widths", "element", "message", "source", "accepted", "origin"];
+  const cell = (value) => {
+    let text = String(value);
+    if (/^[=+\-@\t\r]/.test(text)) text = "'" + text;  // not a formula when a spreadsheet opens it
+    return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  };
+  return [columns.join(","), ...exportRows(issues).map((row) => columns.map((c) => cell(row[c])).join(","))].join("\r\n") + "\r\n";
+}
+function findingsMarkdown(model, issues) {
+  const flat = (value) => String(value).replace(/\s*[\r\n]+\s*/g, " ");
+  const cell = (value) => flat(value).replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
+  const code = (value) => (value ? "`" + flat(value).replace(/`/g, "'").replace(/\|/g, "\\|") + "`" : "");
+  const lines = [`# ui-audit findings${model.data.base_url ? ` for ${model.data.base_url}` : ""}`, ""];
+  if (model.data.created) lines.push(`Run of ${model.data.created}: ${issues.length} finding${issues.length === 1 ? "" : "s"}.`, "");
+  lines.push("| Severity | Check | Page | State | Widths | Element | Message |", "|---|---|---|---|---|---|---|");
+  for (const row of exportRows(issues)) {
+    lines.push(`| ${row.severity} | ${cell(row.check)} | ${code(row.page)} | ${cell(row.state)} | ${row.widths} | ${code(row.element)} | ${cell(row.message)} |`);
+  }
+  return lines.join("\n") + "\n";
 }

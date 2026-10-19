@@ -16,7 +16,12 @@ const RUNTIME_CHECKS = new Set(["console-error", "failed-resource"]);
 
 const debounce = (fn, ms) => { let timer; return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); }; };
 const enc = encodeURIComponent;
-const plural = (n, one, many) => t(n === 1 ? one : many, { n: fmt.n(n) });
+// The language's plural rules pick the text: "one" for its singular forms, the other key for the rest.
+const pluralRules = new Map();
+function plural(n, one, many) {
+  if (!pluralRules.has(I18N.lang)) pluralRules.set(I18N.lang, new Intl.PluralRules(I18N.lang));
+  return t(pluralRules.get(I18N.lang).select(n) === "one" ? one : many, { n: fmt.n(n) });
+}
 const known = (key, raw) => (I18N.has(key) ? t(key) : raw);  // values written by newer or older versions
 
 // ---------------------------------------------------------------- formatting

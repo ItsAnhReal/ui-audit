@@ -17,6 +17,7 @@ import os
 import queue
 import re
 import secrets
+import shlex
 import shutil
 import signal
 import subprocess
@@ -44,6 +45,7 @@ LOCALE = re.compile(r"^[A-Za-z]{2,3}([-_][A-Za-z0-9]{2,8})*$")
 GIT_REF = re.compile(r"^[A-Za-z0-9_./~^@{}][A-Za-z0-9_./~^@{}-]{0,199}$")
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
 DEFAULT_PORT = 8484
+COMMON_PORTS = (3000, 5173, 8080, 4200)  # React and Next, Vite, many others, Angular
 PAGE_POLICY = ("default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
                "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 MAX_BODY = 1_000_000
@@ -62,10 +64,18 @@ FORBIDDEN_PAGE = """<!doctype html><html lang="en"><meta charset="utf-8"><meta n
 
 
 class ApiError(Exception):
-    def __init__(self, status: int, message: str) -> None:
+    """An error for the page: the English message, and a code (err.<code> in ui/i18n.js) with
+    values the page fills into its own language."""
+
+    def __init__(self, status: int, message: str, code: str = "internal", **params) -> None:
         super().__init__(message)
         self.status = status
         self.message = message
+        self.code = code
+        self.params = params
+
+    def body(self) -> dict:
+        return {"error": self.message, "code": self.code, "params": self.params}
 
 
 def recheck_widths(issues: list[dict], low: int, high: int, limit: int = 14) -> list[int]:
@@ -96,9 +106,9 @@ def _strings(value, label: str, limit: int, pattern: re.Pattern | None = None) -
     if isinstance(value, str):
         value = [part for part in re.split(r"[\s,]+", value) if part]
     if not isinstance(value, list) or len(value) > limit or not all(isinstance(v, str) and 0 < len(v) <= 300 for v in value):
-        raise ApiError(400, f"{label} must be a list of at most {limit} short strings")
+        raise ApiError(400, f"{label} must be a list of at most {limit} short strings", "badList", label=label, limit=limit)
     if pattern and not all(pattern.match(v) for v in value):
-        raise ApiError(400, f"{label} contains an invalid value")
+        raise ApiError(400, f"{label} contains an invalid value", "badValue", label=label)
     return value
 
 
@@ -113,6 +123,7 @@ class Workspace:
         self.runs_dir = (runs_dir or (output if output.is_absolute() else self.root / output).parent).resolve()
         self._summaries: dict[str, tuple[tuple, dict]] = {}
         self._run_data: dict[str, tuple[tuple, dict]] = {}
+        self._json_files: dict[Path, tuple[tuple, list[str] | None]] = {}  # file -> (stamp, origins if a session)
         self._lock = threading.Lock()
 
     def rel(self, path: Path) -> str:
@@ -151,7 +162,7 @@ class Workspace:
             if entry["path"] == name and "error" not in entry:
                 path = Path(name)
                 return path if path.is_absolute() else self.root / path
-        raise ApiError(400, f"unknown settings file: {name}")
+        raise ApiError(400, f"unknown settings file: {name}", "unknownSettings", name=name)
 
     def sessions(self) -> list[dict]:
         """Signed-in browser sessions saved by `ui-audit login` (Playwright storage states)."""
@@ -159,15 +170,33 @@ class Workspace:
         for folder in dict.fromkeys([self.runs_dir, self.root / ".ui-audit", self.root]):
             for path in sorted(folder.glob("*.json")):
                 try:
-                    if path.stat().st_size > 5_000_000:
-                        continue
-                    data = json.loads(path.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
+                    stat = path.stat()
+                except OSError:
                     continue
-                if isinstance(data, dict) and "cookies" in data and "origins" in data:
-                    found.append({"path": self.rel(path), "modified": _iso(path.stat().st_mtime),
-                                  "origins": [o.get("origin") for o in data.get("origins", []) if isinstance(o, dict)][:5]})
+                origins = self._session_origins(path, (stat.st_mtime_ns, stat.st_size))
+                if origins is not None:
+                    found.append({"path": self.rel(path), "modified": _iso(stat.st_mtime), "origins": origins})
         return found
+
+    def _session_origins(self, path: Path, stamp: tuple) -> list[str] | None:
+        """The origins of a saved session, None for any other JSON file. The state is asked for
+        every few seconds and a project's package-lock.json can be megabytes: each file is read
+        again only when its time or size changed."""
+        with self._lock:
+            cached = self._json_files.get(path)
+        if cached and cached[0] == stamp:
+            return cached[1]
+        origins = None
+        if stamp[1] <= 5_000_000:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                data = None
+            if isinstance(data, dict) and "cookies" in data and "origins" in data:
+                origins = [o.get("origin") for o in data.get("origins", []) if isinstance(o, dict)][:5]
+        with self._lock:
+            self._json_files[path] = (stamp, origins)
+        return origins
 
     def session_file(self, name: str) -> str:
         if not name:
@@ -175,14 +204,14 @@ class Workspace:
         for entry in self.sessions():
             if entry["path"] == name:
                 return str(self.root / name) if not Path(name).is_absolute() else name
-        raise ApiError(400, f"unknown session file: {name}")
+        raise ApiError(400, f"unknown session file: {name}", "unknownSession", name=name)
 
     def run_dir(self, name: str) -> Path:
         if not isinstance(name, str) or not RUN_NAME.match(name):
-            raise ApiError(400, "invalid run name")
+            raise ApiError(400, "invalid run name", "badRunName")
         path = self.runs_dir / name
         if not (path / report_mod.REPORT_JSON).is_file():
-            raise ApiError(404, f"no run called {name}")
+            raise ApiError(404, f"no run called {name}", "noRun", name=name)
         return path
 
     def _stamp(self, path: Path) -> tuple:
@@ -225,7 +254,7 @@ class Workspace:
             if cached and cached[0] == stamp:
                 return cached[1]
         report = report_mod.read_json(folder)
-        data = report_mod.viewer_data(report)
+        data = report_mod.viewer_data(report, str(folder))
         data["name"] = name
         data["dir"] = str(folder)
         data["summary"] = summarize(name, report, folder)
@@ -308,21 +337,29 @@ class Job:
         self.progress: dict = {}
         self.result: dict | None = None
         self.error: str | None = None
+        self.error_code: str | None = None  # err.<code> in ui/i18n.js
+        self.error_params: dict = {}
         self.proc: subprocess.Popen | None = None
         self.cancel_requested = False
         self._log: deque[str] = deque(maxlen=400)
+        self._logged = 0  # lines ever logged, so the page can append the new ones
         self._lock = threading.Lock()
 
     def log(self, line: str) -> None:
         with self._lock:
             self._log.append(line[:2000])
+            self._logged += 1
+
+    def fail(self, message: str, code: str, **params) -> None:
+        self.error, self.error_code, self.error_params = message, code, params
 
     def public(self) -> dict:
         with self._lock:
-            tail = list(self._log)[-60:]
+            tail, logged = list(self._log)[-60:], self._logged
         return {"id": self.id, "kind": self.kind, "name": self.name, "title": self.title, "source": self.source,
                 "issue_ids": self.issue_ids, "status": self.status, "created": self.created, "started": self.started,
-                "ended": self.ended, "progress": self.progress, "result": self.result, "error": self.error, "log": tail}
+                "ended": self.ended, "progress": self.progress, "result": self.result, "error": self.error,
+                "error_code": self.error_code, "error_params": self.error_params, "log": tail, "log_count": logged}
 
 
 def _stop(proc: subprocess.Popen) -> None:
@@ -384,7 +421,7 @@ class Jobs:
         with self.lock:
             job = self.items.get(job_id)
         if job is None:
-            raise ApiError(404, "no such job")
+            raise ApiError(404, "no such job", "noJob")
         return job
 
     def list(self) -> list[dict]:
@@ -421,7 +458,8 @@ class Jobs:
             try:
                 self._run_audit(job)
             except Exception as exc:  # noqa: BLE001 - one broken job must not stop the queue
-                job.status, job.error, job.ended = "failed", f"{exc.__class__.__name__}: {exc}", time.time()
+                job.fail(f"{exc.__class__.__name__}: {exc}", "jobCrashed", detail=f"{exc.__class__.__name__}: {exc}")
+                job.status, job.ended = "failed", time.time()
 
     def _run_audit(self, job: Job) -> None:
         out = Path(job.spec["config"]["output"])
@@ -448,14 +486,15 @@ class Jobs:
             job.status = "done"
         else:
             job.status = "failed"
-            job.error = job.error or f"the audit stopped (exit code {code}); see the log"
+            if not job.error:
+                job.fail(f"the audit stopped (exit code {code}); see the log", "auditStopped", exit=code)
         if job.status != "done" and fresh and not (out / report_mod.REPORT_JSON).exists():
             shutil.rmtree(out, ignore_errors=True)  # screenshots without a report are of no use
         if job.status == "done" and job.kind == "recheck" and not job.result.get("empty"):
             try:
                 job.result = {**job.result, "recheck": self._recheck_outcome(job)}
             except Exception as exc:  # noqa: BLE001 - the run itself is still there
-                job.error = f"could not compare with {job.source}: {exc}"
+                job.fail(f"could not compare with {job.source}: {exc}", "compareFailed", source=job.source, detail=str(exc))
 
     def _line(self, job: Job, line: str) -> None:
         if line.startswith("{"):
@@ -492,8 +531,9 @@ class Jobs:
         elif kind == "done":
             job.result = event
         elif kind == "error":
-            job.error = str(event.get("message", "the audit failed"))
-            job.log(job.error)
+            params = event.get("params") if isinstance(event.get("params"), dict) else {}
+            job.fail(str(event.get("message", "the audit failed")), str(event.get("code") or "auditFailed"), **params)
+            job.log(job.error or "")
         elif kind == "cancelled":
             job.cancel_requested = True
         if "paths" in progress:
@@ -533,17 +573,17 @@ class Jobs:
             job.status, job.result = "done", {"session": job.name}
         else:
             job.status = "failed"
-            job.error = "the browser window closed before the session was saved"
+            job.fail("the browser window closed before the session was saved", "loginClosed")
 
     def finish_login(self, job_id: str) -> Job:
         job = self.get(job_id)
         if job.kind != "login" or job.status != "waiting" or job.proc is None:
-            raise ApiError(409, "this sign-in is not waiting")
+            raise ApiError(409, "this sign-in is not waiting", "loginNotWaiting")
         try:
             job.proc.stdin.write("\n")
             job.proc.stdin.flush()
         except OSError as exc:
-            raise ApiError(409, f"the sign-in window is gone ({exc})") from exc
+            raise ApiError(409, f"the sign-in window is gone ({exc})", "loginGone") from exc
         job.status = "running"
         return job
 
@@ -563,6 +603,10 @@ class Api:
                 return self.workspace.run_data(name)
             case "GET", ["check"]:
                 return self.check_url((query.get("url") or [""])[0])
+            case "GET", ["discover"]:
+                return self.discover()
+            case "POST", ["command"]:
+                return self.audit_command(body)
             case "POST", ["runs"]:
                 return self.start_audit(body)
             case "POST", ["runs", name, "again"]:
@@ -573,17 +617,17 @@ class Api:
                 ids = _strings(body.get("ids"), "ids", 500)
                 reason = str(body.get("reason") or "").strip()
                 if not ids or not reason or len(reason) > 500:
-                    raise ApiError(400, "give the findings and a reason (at most 500 characters)")
+                    raise ApiError(400, "give the findings and a reason (at most 500 characters)", "acceptNeeds")
                 try:
                     added, already, file = report_mod.accept(self.workspace.run_dir(name), ids, reason)
                 except LookupError as exc:
-                    raise ApiError(404, str(exc)) from exc
+                    raise ApiError(404, str(exc), "unknownIds") from exc
                 return {"added": added, "already": already, "file": self.workspace.rel(file)}
             case "POST", ["runs", name, "unaccept"]:
                 try:
                     removed, file = report_mod.unaccept(self.workspace.run_dir(name), _strings(body.get("ids"), "ids", 500))
                 except LookupError as exc:
-                    raise ApiError(404, str(exc)) from exc
+                    raise ApiError(404, str(exc), "unknownIds") from exc
                 return {"removed": removed, "file": self.workspace.rel(file)}
             case "POST", ["runs", name, "delete"]:
                 return self.delete(name)
@@ -599,7 +643,7 @@ class Api:
                 return self.jobs.cancel(job_id).public()
             case "POST", ["jobs", job_id, "continue"]:
                 return self.jobs.finish_login(job_id).public()
-        raise ApiError(404, f"no such endpoint: {method} /api/{path}")
+        raise ApiError(404, f"no such endpoint: {method} /api/{path}", "notFound")
 
     def state(self) -> dict:
         ws = self.workspace
@@ -636,17 +680,68 @@ class Api:
             threading.Thread(target=look, daemon=True).start()
         return self._browser
 
-    def check_url(self, url: str) -> dict:
+    def check_url(self, url: str, timeout: float = 4) -> dict:
         if not re.match(r"^https?://[^\s/]+", url or ""):
             return {"ok": False, "detail": "not an http(s) address"}
         try:
-            with urllib.request.urlopen(url, timeout=4) as response:  # noqa: S310 - the person's own dev server
+            with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310 - the person's own dev server
                 return {"ok": True, "status": response.status}
         except urllib.error.HTTPError as exc:
             return {"ok": exc.code < 500, "status": exc.code}
         except Exception as exc:  # noqa: BLE001 - any network error means "not reachable"
             reason = getattr(exc, "reason", exc)
             return {"ok": False, "detail": str(reason)[:160]}
+
+    def discover(self) -> dict:
+        """Dev servers that answer on the usual ports, for a first start without a settings
+        file. Only this computer's loopback address is tried, never another host."""
+        found: dict[int, bool] = {}
+
+        def look(port: int) -> None:
+            found[port] = self.check_url(f"http://127.0.0.1:{port}/", timeout=1.5)["ok"]
+
+        threads = [threading.Thread(target=look, args=(port,), daemon=True) for port in COMMON_PORTS]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(2)
+        return {"found": [f"http://127.0.0.1:{port}" for port in COMMON_PORTS if found.get(port)], "ports": list(COMMON_PORTS)}
+
+    def audit_command(self, body: dict) -> dict:
+        """The command line that starts the audit this body would start (POST /api/runs),
+        quoted for a POSIX shell like every command ui-audit prints."""
+        ws, q = self.workspace, shlex.quote
+        parts = ["ui-audit audit"]
+        config, settings_url = str(body.get("config") or ""), None
+        if config:
+            parts.append(f"--config {q(config)}")
+            try:
+                settings_url = ws.config(ws.config_file(config)).base_url
+            except (ApiError, ConfigError, OSError, ValueError):
+                pass
+        base_url = str(body.get("base_url") or "").strip()
+        if base_url and base_url != settings_url:
+            parts.append(f"--base-url {q(base_url)}")
+        mode = body.get("mode")
+        if mode == "quick":
+            parts.append("--fast")
+        if mode == "pages":
+            parts += [f"--route {q(route)}" for route in _strings(body.get("routes"), "routes", 60)]
+            widths = _strings(body.get("widths"), "widths", 40)
+            if widths:
+                parts.append(f"--width {q(','.join(widths))}")
+        for flag, key in (("--storage-state", "storage_state"), ("--locale", "locale")):
+            if body.get(key):
+                parts.append(f"{flag} {q(str(body[key]))}")
+        if body.get("states") is False:
+            parts.append("--no-states")
+        if not body.get("annotate"):
+            parts.append("--no-annotate")
+        if body.get("changed_since") and mode != "pages":
+            parts.append(f"--changed-since {q(str(body['changed_since']))}")
+        if body.get("name"):
+            parts.append(f"--output {q(ws.rel(ws.runs_dir) + '/' + str(body['name']))}")
+        return {"command": " \\\n  ".join(parts)}
 
     def _name(self, base: str) -> str:
         base = re.sub(r"[^A-Za-z0-9._-]+", "-", base).strip("-.")[:70] or "audit"
@@ -679,30 +774,30 @@ class Api:
         config_file, cfg = self._settings(body)
         base_url = str(body.get("base_url") or cfg.base_url).strip()
         if not re.match(r"^https?://[^\s]+$", base_url):
-            raise ApiError(400, "the app address must start with http:// or https://")
+            raise ApiError(400, "the app address must start with http:// or https://", "badUrl")
         cfg.base_url = base_url
         mode = body.get("mode", "quick")
         if mode not in ("quick", "complete", "pages"):
-            raise ApiError(400, "mode must be quick, complete or pages")
+            raise ApiError(400, "mode must be quick, complete or pages", "badMode")
         if mode in ("quick", "complete"):
             cfg.states.sweep = "key" if mode == "quick" else "full"
         routes = _strings(body.get("routes"), "routes", 60) if mode == "pages" else []
         if any(not route.startswith("/") for route in routes):
-            raise ApiError(400, "every page must start with /, like /pricing")
+            raise ApiError(400, "every page must start with /, like /pricing", "pageSlash")
         if mode == "pages" and not routes:
-            raise ApiError(400, "list at least one page, like /pricing")
+            raise ApiError(400, "list at least one page, like /pricing", "noPages")
         widths = _strings(body.get("widths"), "widths", 40, re.compile(r"^\d{3,4}$")) if mode == "pages" else []
         cfg.viewports.widths = sorted({int(w) for w in widths})
         if "locale" in body:
             locale = str(body.get("locale") or "")
             if locale and not LOCALE.match(locale):
-                raise ApiError(400, "language must look like de or fr-FR")
+                raise ApiError(400, "language must look like de or fr-FR", "badLocale")
             cfg.locale = locale
         if "browsers" in body:
             try:
                 cfg.browsers = parse_browsers(body.get("browsers") or [])
             except ConfigError as exc:
-                raise ApiError(400, str(exc)) from exc
+                raise ApiError(400, str(exc), "config", detail=str(exc)) from exc
         if "storage_state" in body:
             cfg.storage_state = ws.session_file(str(body.get("storage_state") or ""))
         if body.get("states") is False:
@@ -713,12 +808,12 @@ class Api:
         if body.get("changed_since"):
             ref = str(body["changed_since"])
             if not GIT_REF.match(ref):
-                raise ApiError(400, "not a git branch, tag or commit")
+                raise ApiError(400, "not a git branch, tag or commit", "badRef")
             baseline = str(body.get("baseline") or "")
             if not baseline:
                 complete = [r for r in ws.runs() if not r["targeted"]]
                 if not complete:
-                    raise ApiError(400, "only-changed runs need an earlier complete audit to compare with")
+                    raise ApiError(400, "only-changed runs need an earlier complete audit to compare with", "noBaseline")
                 baseline = complete[0]["name"]
             extra = {"changed_since": ref, "baseline": str(ws.run_dir(baseline))}
         # "menusmarter" from .ui-audit/menusmarter.toml; for the default settings file, the project folder's name
@@ -739,12 +834,12 @@ class Api:
         wanted = set(_strings(body.get("ids"), "ids", 500))
         issues = [i for i in report["issues"] if i["id"] in wanted]
         if not issues:
-            raise ApiError(404, "none of these findings are in this run")
+            raise ApiError(404, "none of these findings are in this run", "notInRun")
         config = copy.deepcopy(report["config"])
         viewports = config.setdefault("viewports", {})
         widths = recheck_widths(issues, viewports.get("min_width", 320), viewports.get("max_width", 1920))
         if not widths:
-            raise ApiError(400, "these findings have no widths to look at again")
+            raise ApiError(400, "these findings have no widths to look at again", "noWidths")
         viewports["widths"] = widths
         if all(i["state"] == "default" for i in issues):
             config.setdefault("states", {})["auto"] = False  # nothing to open: skip looking for menus and dialogs
@@ -760,10 +855,10 @@ class Api:
         base_url = str(body.get("base_url") or cfg.base_url).strip()
         path = str(body.get("path") or "/").strip()
         if not re.match(r"^https?://[^\s]+$", base_url) or not path.startswith("/"):
-            raise ApiError(400, "give the app address and a page that starts with /")
+            raise ApiError(400, "give the app address and a page that starts with /", "loginNeeds")
         name = str(body.get("save") or "auth.json")
         if not RUN_NAME.match(name) or not name.endswith(".json"):  # a plain file name: never package.json one folder up
-            raise ApiError(400, "sessions are saved as a plain .json file name next to the runs")
+            raise ApiError(400, "sessions are saved as a plain .json file name next to the runs", "badSessionName")
         save = ws.runs_dir / name
         args = ["login", "--base-url", base_url, "--path", path, "--save", str(save)]
         if config_file:
@@ -773,9 +868,9 @@ class Api:
     def delete(self, name: str) -> dict:
         folder = self.workspace.run_dir(name)
         if name in self.jobs.busy_names():
-            raise ApiError(409, "this run is still being written")
+            raise ApiError(409, "this run is still being written", "runBusy")
         if folder.is_symlink() or folder.resolve().parent != self.workspace.runs_dir:
-            raise ApiError(400, "only run folders directly in the runs folder can be deleted")
+            raise ApiError(400, "only run folders directly in the runs folder can be deleted", "notDeletable")
         size = sum(f.stat().st_size for f in folder.rglob("*") if f.is_file())
         shutil.rmtree(folder)
         return {"deleted": name, "bytes": size}
@@ -786,7 +881,7 @@ class Api:
         try:
             subprocess.Popen([*command, str(folder)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except OSError as exc:
-            raise ApiError(501, f"cannot open folders here: {exc}") from exc
+            raise ApiError(501, f"cannot open folders here: {exc}", "cannotReveal", detail=str(exc)) from exc
         return {"opened": str(folder)}
 
 
@@ -808,27 +903,28 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         try:
             if self.headers.get("Host", "") not in self.server.hosts:
-                raise ApiError(403, "unexpected Host header")
+                raise ApiError(403, "unexpected Host header", "badHost")
             if method == "GET" and url.path in ("/", "/index.html"):
                 return self._page(parse_qs(url.query).get("k", [""])[0])
             if method == "GET" and url.path.startswith("/files/"):
                 if not self._has_session():
-                    raise ApiError(403, "open the app first")
+                    raise ApiError(403, "open the app first", "openFirst")
                 return self._send_file(url.path[len("/files/"):])
             if url.path.startswith("/api/"):
                 if not hmac.compare_digest(self.headers.get("X-UI-Audit-Token", ""), self.server.token):
-                    raise ApiError(403, "missing or wrong token")
+                    raise ApiError(403, "missing or wrong token", "badToken")
                 body = self._body() if method == "POST" else {}
                 result = self.server.api.handle(method, url.path[len("/api/"):], parse_qs(url.query), body)
                 return self._json(200, result)
-            raise ApiError(404, "not found")
+            raise ApiError(404, "not found", "notFound")
         except ApiError as exc:
-            self._json(exc.status, {"error": exc.message})
+            self._json(exc.status, exc.body())
         except ConfigError as exc:
-            self._json(400, {"error": f"config error: {exc}"})
+            self._json(400, ApiError(400, f"config error: {exc}", "config", detail=str(exc)).body())
         except Exception as exc:  # noqa: BLE001 - show it in the page instead of dropping the connection
             traceback.print_exc()
-            self._json(500, {"error": f"{exc.__class__.__name__}: {exc}"})
+            detail = f"{exc.__class__.__name__}: {exc}"
+            self._json(500, ApiError(500, detail, "internal", detail=detail).body())
 
     def _page(self, key: str) -> None:
         """The page, only for a browser that opened the address printed in the terminal: its
@@ -865,13 +961,13 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True  # unknown body length: do not read the rest as the next request
         if length > MAX_BODY:
             self.close_connection = True
-            raise ApiError(413, "request too large")
+            raise ApiError(413, "request too large", "tooLarge")
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
         except ValueError as exc:
-            raise ApiError(400, "the request body is not JSON") from exc
+            raise ApiError(400, "the request body is not JSON", "notJson") from exc
         if not isinstance(body, dict):
-            raise ApiError(400, "the request body must be a JSON object")
+            raise ApiError(400, "the request body must be a JSON object", "notObject")
         return body
 
     def _send_file(self, rest: str) -> None:
@@ -879,7 +975,7 @@ class Handler(BaseHTTPRequestHandler):
         folder = self.server.api.workspace.run_dir(unquote(name)).resolve()
         target = (folder / unquote(inner)).resolve()
         if not target.is_relative_to(folder) or target.suffix.lower() not in IMAGE_TYPES or not target.is_file():
-            raise ApiError(404, "not found")
+            raise ApiError(404, "not found", "notFound")
         modified = target.stat().st_mtime
         since = self.headers.get("If-Modified-Since")
         if since:

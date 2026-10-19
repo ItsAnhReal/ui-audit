@@ -107,3 +107,16 @@ def test_auto_state_ids_leave_out_counts():
     assert auto_state_id("expand", "12") == "expand-expand"
     # Two triggers that read the same are told apart by their selector, not by discovery order.
     assert auto_state_id("expand", "More", "nav > button.more:nth-of-type(2)") == "expand-more-button-more"
+
+
+def test_a_message_keeps_its_key_and_values_for_the_app_and_its_signature():
+    issues = IssueSet()
+    raw = {"check": "offscreen-control", "severity": "P1", "selector": "button.buy",
+           "message": "Control is cut off at the left edge of a 390px viewport.",
+           "message_key": "controlCut", "message_params": {"edge": "left", "vw": 390}}
+    issue = issues.observe(raw, "/", "default", 390)
+    issues.observe({**raw, "message": "Control is cut off at the left edge of a 400px viewport.",
+                    "message_params": {"edge": "left", "vw": 400}}, "/", "default", 400)
+    assert issue["signature"] == "offscreen-control|/|default|button.buy"
+    assert (issue["message"], issue["message_key"], issue["message_params"]) == (raw["message"], "controlCut", {"edge": "left", "vw": 390})
+    assert "message_key" not in IssueSet().runtime("console-error", "/", "default", "boom", 1280)

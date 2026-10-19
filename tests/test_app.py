@@ -1,10 +1,13 @@
 """`ui-audit ui`: the audit subprocess it starts, and the app driven in a real browser."""
 
 import json
+import re
+import shlex
 import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -207,8 +210,8 @@ def test_static_report_is_safe_and_works_from_the_keyboard(tmp_path):
         page.locator(".item").first.wait_for()
         assert page.locator('a[href^="javascript"]').count() == 0  # base_url is not a web address: no "open page" link
         page.get_by_role("button", name="Copy accept command").click()
-        quoted = str(tmp_path / "it's a run").replace("'", "'\\''")  # the run folder as the OS writes it
-        assert page.evaluate("window.copied").startswith(f"ui-audit accept '{quoted}' ")  # one shell word
+        quoted = shlex.quote(str(tmp_path / "it's a run"))  # the run folder as the OS writes it, as one shell word
+        assert page.evaluate("window.copied").startswith(f"ui-audit accept {quoted} ")
 
         # the focus ring shows on a ghost button that sets box-shadow: none
         settings = page.get_by_role("button", name="Settings")
@@ -275,3 +278,114 @@ def test_app_opens_only_with_its_key_and_announces_errors(tmp_path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def keyed_run(folder, project):
+    """A run with three findings, two with the message keys the probe writes."""
+    small_run(folder, "http://localhost:3000", project)
+    data = report.read_json(folder)
+    base = data["issues"][0]
+    data["issues"] = [
+        {**base, "id": "a1", "signature": "offscreen-control|/|default|button.buy", "check": "offscreen-control", "severity": "P1",
+         "selector": "button.buy", "message": "Control is cut off at the left edge of a 390px viewport.",
+         "message_key": "controlCut", "message_params": {"edge": "left", "vw": 390}},
+        {**base, "id": "b2", "signature": "text-spill|/|default|p.lead", "selector": "p.lead",
+         "message": 'Text spills 4px outside its box: "a, b"', "message_key": "spill", "message_params": {"px": 4, "text": "a, b"}},
+        {**base, "id": "c3", "signature": "text-spill|/|default|p.note", "selector": "p.note"},
+    ]
+    data["stats"]["issues"] = report.summary_counts(data["issues"])
+    report.write_json(data, folder)
+    report.write_html(data, folder)
+    return folder
+
+
+@pytest.mark.e2e
+@pytest.mark.usefixtures("chromium_available")
+def test_static_report_translates_shares_filters_and_exports(tmp_path):
+    from playwright.sync_api import sync_playwright
+
+    from ui_audit.browser import launch
+
+    out = keyed_run(tmp_path / "run", tmp_path)
+    errors = []
+    with sync_playwright() as playwright:
+        browser = launch(playwright)
+        context = browser.new_context(locale="de-DE", viewport={"width": 1280, "height": 900}, accept_downloads=True)
+        context.add_init_script("Object.defineProperty(navigator, 'clipboard', {value: {writeText: async (t) => { window.copied = t; }}})")
+        page = context.new_page()
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.goto((out / "index.html").as_uri() + "#/findings?sev=P1")
+        page.locator(".item").first.wait_for()
+        assert page.locator(".item").count() == 1  # the filter came from the link
+        assert page.locator(".detail .msg").inner_text() == "Bedienelement wird bei 390 px Fensterbreite am linken Rand abgeschnitten."
+        page.locator('.chip[data-sev="P2"]').click()
+        assert "sev=P1%2CP2" in page.evaluate("location.hash")
+        page.get_by_role("button", name="Aktionen für die angezeigten Befunde").click()
+        with page.expect_download() as download:
+            page.get_by_role("menuitem", name="Als CSV speichern").click()
+        csv = Path(download.value.path()).read_text(encoding="utf-8").splitlines()
+        assert csv[0].startswith("id,severity,check") and len(csv) == 4 and csv[1].startswith("a1,P1,offscreen-control")
+        page.get_by_role("button", name="Aktionen für die angezeigten Befunde").click()
+        page.get_by_role("menuitem", name="Fix-Prompts kopieren").click()
+        prompts = page.evaluate("window.copied")
+        assert prompts.count("Fix this UI defect") == 3 and "\n\n---\n\n" in prompts  # one per cause
+        page.reload()  # the filters stay in the address
+        page.locator(".item").first.wait_for()
+        assert page.locator('.chip[data-sev="P2"]').get_attribute("aria-pressed") == "true"
+
+        # a phone: all four tabs fit, and the detail steps through the findings
+        phone = context.new_page()
+        phone.on("pageerror", lambda exc: errors.append(str(exc)))
+        phone.set_viewport_size({"width": 360, "height": 740})
+        phone.goto((out / "index.html").as_uri())
+        phone.locator(".item").first.wait_for()
+        assert phone.evaluate("[...document.querySelectorAll('.tabs a')].every((a) => a.getBoundingClientRect().right <= innerWidth)")
+        phone.locator(".item").first.click()
+        assert phone.locator(".detail-nav .pos").inner_text() == "1 von 3"
+        phone.get_by_role("button", name="Nächster Befund").click()
+        assert phone.locator(".detail-nav .pos").inner_text() == "2 von 3"
+        phone.get_by_role("button", name="Nächster Befund").click()
+        assert phone.get_by_role("button", name="Nächster Befund").is_disabled()
+        assert phone.evaluate("document.activeElement.getAttribute('aria-label')") == "Vorheriger Befund"  # focus stays in the bar
+        browser.close()
+    assert errors == []
+
+
+@pytest.mark.e2e
+@pytest.mark.usefixtures("chromium_available")
+def test_app_without_settings_has_no_address_and_accepts_in_bulk(tmp_path):
+    from playwright.sync_api import sync_playwright
+
+    from ui_audit.browser import launch
+
+    project = tmp_path / "shop"
+    project.mkdir()
+    keyed_run(project / ".ui-audit" / "shop-20260101-090000", project)
+    server = AppServer(Workspace(project), 0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    errors = []
+    try:
+        with sync_playwright() as playwright:
+            browser = launch(playwright)
+            page = browser.new_page(locale="en-US", viewport={"width": 1280, "height": 900})
+            page.on("pageerror", lambda exc: errors.append(str(exc)))
+            page.goto(server.launch_url)
+            head = page.locator(".page-head p")
+            head.get_by_text(re.compile("Found an app at|Nothing answers on ports 3000, 5173, 8080, 4200")).wait_for()
+            assert "not reachable" not in head.inner_text() and "localhost:3000" not in head.inner_text()
+
+            page.goto(f"{server.url}#/run/shop-20260101-090000?sev=P2")
+            page.locator(".item").first.wait_for()
+            page.get_by_role("button", name="Actions for the findings shown").click()
+            page.get_by_role("menuitem", name="Accept all 2…").click()
+            dialog = page.get_by_role("dialog", name="Accept the findings shown")
+            dialog.locator("textarea").fill("known teaser")
+            dialog.get_by_role("button", name="Accept 2 findings").click()
+            page.get_by_text("2 findings accepted. Later runs keep this decision.").wait_for()
+            browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+    accepted = json.loads((project / "ui-audit.accepted.json").read_text())
+    assert sorted(e["signature"] for e in accepted) == ["text-spill|/|default|p.lead", "text-spill|/|default|p.note"]
+    assert errors == []

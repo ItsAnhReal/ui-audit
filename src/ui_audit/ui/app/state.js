@@ -30,7 +30,12 @@ async function api(path, body) {
   });
   let data = null;
   try { data = await response.json(); } catch (_) { /* empty body */ }
-  if (!response.ok) throw new Error((data && data.error) || `HTTP ${response.status}`);
+  if (!response.ok) {
+    const error = new Error((data && data.error) || `HTTP ${response.status}`);
+    error.code = data && data.code;
+    error.params = data && data.params;
+    throw error;
+  }
   return data;
 }
 
@@ -45,6 +50,7 @@ const S = {
   page: null,             // the mounted view: { kind, key, update(route), onState() }
   knownJobs: new Map(),   // job id -> last seen status, to notice when one finishes
   reach: new Map(),       // base URL -> reachability result
+  discovered: null,       // without a settings file: dev servers answering on the usual ports
 };
 
 function viewState(name) {
@@ -77,13 +83,19 @@ async function checkReach(url) {
   const cached = S.reach.get(url);
   if (cached && Date.now() - cached.at < 15000) return cached.result;
   let result;
-  try { result = await api("check?url=" + enc(url)); } catch (error) { result = { ok: false, detail: error.message }; }
+  try { result = await api("check?url=" + enc(url)); } catch (error) { result = { ok: false, detail: errorText(error) }; }
   S.reach.set(url, { at: Date.now(), result });
   return result;
 }
 
+// Asked once per page load: the server tries a few usual ports on 127.0.0.1.
+async function discover() {
+  if (!S.discovered) S.discovered = api("discover").catch(() => ({ found: [], ports: [] }));
+  return S.discovered;
+}
+
 async function cancelJob(job) {
-  try { await api(`jobs/${job.id}/cancel`, {}); toast("info", t("toast.cancelling")); } catch (error) { toast("bad", error.message); }
+  try { await api(`jobs/${job.id}/cancel`, {}); toast("info", t("toast.cancelling")); } catch (error) { toast("bad", errorText(error)); }
   refreshState();
 }
 async function runAgain(name, anyway) {
@@ -97,11 +109,11 @@ async function runAgain(name, anyway) {
     toast("good", t("toast.started", { name: job.name }), parseHash().view === "home" ? null : { label: t("toast.showProgress"), run: () => go({ view: "home" }) });
     askNotify();
     refreshState();
-  } catch (error) { toast("bad", error.message); }
+  } catch (error) { toast("bad", errorText(error)); }
 }
 
 async function reveal(name) {
-  try { await api(`runs/${enc(name)}/reveal`, {}); } catch (error) { toast("bad", error.message); }
+  try { await api(`runs/${enc(name)}/reveal`, {}); } catch (error) { toast("bad", errorText(error)); }
 }
 async function deleteRun(run) {
   const ok = await confirmDialog({ title: t("delete.title", { name: run.name }), text: t("delete.text", { size: fmt.bytes(run.bytes) }), confirm: t("action.delete"), danger: true });
@@ -113,7 +125,7 @@ async function deleteRun(run) {
     toast("good", t("toast.deleted", { name: run.name }));
     await refreshState();
     if (parseHash().view !== "home") go({ view: "home" });
-  } catch (error) { toast("bad", error.message); }
+  } catch (error) { toast("bad", errorText(error)); }
 }
 
 let askedNotify = false;
@@ -156,7 +168,7 @@ function noticeFinishedJobs(jobs, first) {
       notify(text);
       if (job.source) forgetRun(job.source);
     } else if (job.status === "failed") {
-      toast("bad", t("toast.failed", { name: job.name, error: job.error || "" }), { label: t("toast.showLog"), run: () => go({ view: "home" }) }, 0);
+      toast("bad", t("toast.failed", { name: job.name, error: jobError(job, "") }), { label: t("toast.showLog"), run: () => go({ view: "home" }) }, 0);
       notify(t("toast.failed", { name: job.name, error: "" }));
     }
   }

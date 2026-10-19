@@ -16,41 +16,35 @@ function skipText(why) {
   if ((m = /^same page as (.*)$/.exec(why))) return t("skip.same", { as: m[1] });
   return why;
 }
-// The probe measures in English; its known sentences are shown in the app's language. The fix prompt keeps the original.
-const MESSAGES = [
-  [/^Page is (\d+)px wide in a (\d+)px viewport\.$/, "msg.pageWide", ["page", "vw"]],
-  [/^Extends to (\d+)px in a (\d+)px viewport \(page scrolls sideways by (\d+)px\)\.$/, "msg.extends", ["right", "vw", "by"]],
-  [/^Control is cut off at the (left|right) edge of a (\d+)px viewport\.$/, "msg.controlCut", ["edge", "vw"]],
-  [/^Content is cut off at the (left|right) edge of a (\d+)px viewport\.$/, "msg.contentCut", ["edge", "vw"]],
-  [/^Grid columns need (\d+)px but the grid is (\d+)px wide in a (\d+)px viewport \(page scrolls sideways by (\d+)px\)\.$/, "msg.gridExtends", ["needed", "box", "vw", "by"]],
-  [/^Grid columns need (\d+)px but the grid is (\d+)px wide; content is cut off at the (left|right) edge of a (\d+)px viewport\.$/, "msg.gridCut", ["needed", "box", "edge", "vw"]],
-  [/^Content is clipped by (\d+)px horizontally: "([^]*)"$/, "msg.clippedX", ["px", "text"]],
-  [/^Content is clipped by (\d+)px vertically: "([^]*)"$/, "msg.clippedY", ["px", "text"]],
-  [/^Text spills (\d+)px outside its box: "([^]*)"$/, "msg.spill", ["px", "text"]],
-  [/^Overlaps (.+) by (\d+)% of the smaller control\.$/, "msg.overlaps", ["other", "pct"]],
-  [/^Target is (\d+)×(\d+)px, under (\d+)×\d+px, and too close to "([^]*)"\.$/, "msg.target", ["w", "h", "min", "near"]],
-  [/^(\w+) has no accessible name\.$/, "msg.unnamed", ["tag"]],
-];
+// The probe measures in English and sends each message's key and values along (probe.js
+// MESSAGES); known keys are shown in the app's language. Agent findings, runtime errors, reports
+// from before the keys and keys this version does not know keep the English text, as does the fix prompt.
 function messageText(issue) {
   const raw = issue.message || "";
-  if (issue.origin === "agent" || RUNTIME_CHECKS.has(issue.check)) return raw;
-  for (const [pattern, key, names] of MESSAGES) {
-    const m = pattern.exec(raw);
-    if (!m) continue;
-    const vars = Object.fromEntries(names.map((name, n) => [name, m[n + 1]]));
-    if (vars.edge) vars.edge = t(`msg.edge.${vars.edge}`);
-    if (vars.other) vars.other = shortSelector(vars.other);
-    return t(key, vars);
-  }
-  return raw;
+  if (!issue.message_key || issue.origin === "agent") return raw;
+  const text = translatedMessage(issue.message_key, issue.message_params || {});
+  return text === null ? raw : text;
 }
-function contentDetail(detail) {
-  let m;
-  if ((m = /^(\d+) characters of text, (\d+) controls?$/.exec(detail))) return t("content.thinDetail", { chars: fmt.n(+m[1]), controls: fmt.n(+m[2]) });
-  if ((m = /^(\d+) sections? stays? invisible$/.exec(detail))) return t("content.hiddenDetail", { n: fmt.n(+m[1]) });
-  if ((m = /^(\d+) skeleton placeholders$/.exec(detail))) return t("content.skeletons", { n: fmt.n(+m[1]) });
-  if (detail === "a region is still marked busy") return t("content.busy");
-  return detail;
+function translatedMessage(key, params) {
+  if (!I18N.has(`msg.${key}`)) return null;
+  const vars = {};
+  for (const [name, value] of Object.entries(params)) {
+    if (value && typeof value === "object") {  // a clause that is a message of its own
+      vars[name] = translatedMessage(value.key, value.params || {});
+      if (vars[name] === null) return null;
+    } else if (name === "edge") vars[name] = known(`msg.edge.${value}`, value);
+    else if (name === "other") vars[name] = shortSelector(value);
+    else vars[name] = value;
+  }
+  return t(`msg.${key}`, vars);
+}
+// Why a page may not show its real content; translated when the probe sent a key.
+function contentDetail(content) {
+  const key = content && content.detail_key && `content.${content.detail_key}`;
+  if (!key || !I18N.has(key)) return (content && content.detail) || "";
+  const vars = {};
+  for (const [name, value] of Object.entries(content.detail_params || {})) vars[name] = typeof value === "number" ? fmt.n(value) : value;
+  return t(key, vars);
 }
 
 function shortSelector(selector) {
@@ -80,5 +74,13 @@ function reasonText(reasons) {
   return (reasons || []).map((r) => known(`reason.${r}`, r)).join(", ");
 }
 
-// one word for a POSIX shell: plain when safe, otherwise single-quoted
-function shellQuote(v) { return /^[\w./:@%+=,-]+$/.test(v) ? v : `'${v.replace(/'/g, "'\\''")}'`; }
+// Server and job errors carry a code (err.<code>) with values; known codes are shown in the
+// app's language, anything else in the English the server wrote.
+function codeText(code, params, raw) {
+  const key = `err.${code}`;
+  if (!code || !I18N.has(key)) return raw;
+  const text = t(key, params || {});
+  return /\{\w+\}/.test(text) ? raw : text;  // a value this version expects is missing
+}
+function errorText(error) { return codeText(error.code, error.params, error.message); }
+function jobError(job, fallback) { return codeText(job.error_code, job.error_params, job.error || fallback); }

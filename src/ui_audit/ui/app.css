@@ -327,7 +327,8 @@ select { padding-right: 28px; appearance: none; background-image: linear-gradien
 /* detail */
 .detail { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .detail-inner { padding: 20px 24px 32px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
-.detail .back { display: none; }
+.detail .detail-nav { display: none; }
+.detail-nav .pos { margin-left: auto; color: var(--text-3); font-size: 13px; font-variant-numeric: tabular-nums; }
 .detail h2 { margin: 6px 0 0; font-size: 19px; line-height: 1.3; letter-spacing: -0.01em; }
 .detail .msg { margin: 6px 0 0; color: var(--text-2); overflow-wrap: anywhere; }
 .detail .headline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -565,7 +566,7 @@ details.more > div { display: grid; grid-template-columns: minmax(0, 1fr); gap: 
   .split:not(.has-detail) .detail { display: none; }
   .detail { overflow: visible; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
   .detail-inner { padding: 16px; }
-  .detail .back { display: inline-flex; justify-self: start; }
+  .detail .detail-nav { display: flex; align-items: center; gap: 6px; }
   .shortcuts { display: none; }
   .compare-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .diff { grid-template-columns: minmax(0, 1fr); }
@@ -594,6 +595,10 @@ details.more > div { display: grid; grid-template-columns: minmax(0, 1fr); gap: 
 }
 @media (max-width: 520px) {
   .crumbs .optional { display: none; }
+  /* the four tabs share the width instead of scrolling "Details" out of sight */
+  .tabs { gap: 0; padding: 0 8px; }
+  .tabs a { flex: 1 1 auto; justify-content: center; gap: 4px; padding: 9px 4px 11px; min-width: 0; }
+  .tabs a .n { padding: 0 5px; font-size: 11px; }
   .page-head h1 { font-size: 21px; }
   .facts { grid-template-columns: 1fr; gap: 2px; }
   .facts dd { margin-bottom: 8px; }

@@ -43,6 +43,8 @@ async function compareView(route) {
     ["needs_review", t("compare.review"), "", "spark"],
   ];
   let showing = new Set(["introduced", "persistent", "fixed", "needs_review"]);
+  const FIRST = 150;  // drawn at once, with their screenshots; the rest on request
+  const everything = new Set();  // sections showing all their entries
   const tiles = h("div", { class: "compare-tiles" });
   const list = h("div");
   function drawTiles() {
@@ -64,7 +66,7 @@ async function compareView(route) {
     for (const [key, label] of sections) {
       if (!showing.has(key) || !result[key].length) continue;
       list.append(h("div", { class: "section-title" }, label, h("span", { class: "muted", text: fmt.n(result[key].length) })));
-      list.append(h("div", { class: "diffs" }, result[key].slice(0, 150).map((issue) => {
+      list.append(h("div", { class: "diffs" }, (everything.has(key) ? result[key] : result[key].slice(0, FIRST)).map((issue) => {
         const runName = key === "fixed" ? base : current;
         return h("div", { class: "card diff" },
           h("div", {}, h("div", { class: "t" }, sev(issue.severity), I18N.check(issue.check), RUNTIME_CHECKS.has(issue.check) ? null : h("span", { class: "muted", style: { fontWeight: "400" }, text: fmt.range(lo(issue), hi(issue)) })),
@@ -73,7 +75,9 @@ async function compareView(route) {
             RUNTIME_CHECKS.has(issue.check) ? null : h("code", { text: issue.selector, title: issue.selector })),
           RUNTIME_CHECKS.has(issue.check) ? null : h("div", { class: "pair" }, thumb(before, issue, t("compare.beforeShort")), thumb(after, issue, t("compare.afterShort"))));
       })));
-      if (result[key].length > 150) list.append(h("p", { class: "muted", text: t("compare.more", { n: result[key].length - 150 }) }));
+      if (result[key].length > FIRST && !everything.has(key)) {
+        list.append(h("button", { class: "btn more-diffs", onClick: () => { everything.add(key); drawList(); } }, icon("down"), t("compare.showAll", { n: fmt.n(result[key].length - FIRST) })));
+      }
     }
     if (!list.children.length) list.append(h("div", { class: "card" }, emptyState("checkCircle", t("compare.same.title"), t("compare.same.text"))));
   }

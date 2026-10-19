@@ -32,7 +32,7 @@ When a check reports something that is not a defect, first add the smallest page
 - Add tests for every change in behaviour, and a line under `## Unreleased` in `CHANGELOG.md` for anything users notice.
 - Follow the invariants in [`CLAUDE.md`](CLAUDE.md), the guidance shared by people and coding agents. In particular: an issue's identity is its signature `check|route|state|selector`, so a change to selector generation or check names breaks comparisons with old baselines. Say so in the pull request.
 - Every planted defect in the demo site has an end-to-end assertion; add one when you add a check.
-- Texts in the app (`src/ui_audit/ui/app/*.js`) go through `t()` and exist in English and German.
+- Texts in the app (`src/ui_audit/ui/app/*.js`) go through `t()` and exist in English and German. So do `msg.<key>` for each message in `probe.js` `MESSAGES` and `err.<code>` for each error code the server and runner send (`tests/test_i18n.py` checks all three). Pure functions in `ui/app/core.js`, `text.js` and `model.js` have Node tests in `tests/test_app_js.py`.
 
 ## Releasing
 

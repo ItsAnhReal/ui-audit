@@ -46,7 +46,8 @@ function newAuditSheet(preset) {
   const annotateBox = h("input", { type: "checkbox", id: "na-annotate" });
   const changedInput = h("input", { type: "text", id: "na-changed", placeholder: t("na.changed.placeholder"), spellcheck: "false" });
   const nameInput = h("input", { type: "text", id: "na-name", spellcheck: "false" });
-  const command = h("pre", { class: "cmd" });
+  const command = h("pre", { class: "cmd" }, document.createTextNode(""),
+    h("button", { type: "button", class: "btn ghost icon sm", "aria-label": t("action.copy"), onClick: () => copy(commandText.replace(/ \\\n {2}/g, " ")) }, icon("copy")));
   const estimate = h("span", { class: "hint", "aria-live": "polite" });
   let reachable = true, submitError = "";
   const start = h("button", { class: "btn primary", type: "submit" }, icon("play"), t("na.start"));
@@ -64,7 +65,11 @@ function newAuditSheet(preset) {
 
   function applyConfig() {
     const info = configInfo();
-    urlInput.value = info.base_url || urlInput.value || "http://localhost:3000";
+    urlInput.value = preset?.base_url || info.base_url || urlInput.value;
+    if (!urlInput.value && !S.state.config?.path) {  // no settings file: a dev server found on a usual port, if any
+      discover().then(({ found }) => { if (!urlInput.value && found.length) { urlInput.value = found[0]; checkUrl(); sync(); } });
+    }
+    if (!urlInput.value) urlInput.value = S.state.config?.path ? S.state.config.base_url || "" : "";
     const session = form.session !== null && S.state.sessions.some((s) => s.path === form.session) ? form.session
       : (S.state.sessions.find((s) => info.storage_state && (s.path === info.storage_state || s.path.endsWith(info.storage_state.replace(/^\.\//, ""))))?.path || "");
     fillSessions(session);
@@ -74,6 +79,7 @@ function newAuditSheet(preset) {
   }
   const checkUrl = debounce(async () => {
     const url = urlInput.value.trim();
+    if (!url) { urlStatus.className = "status-dot"; urlStatus.textContent = ""; reachable = true; footNote(); return; }
     urlStatus.className = "status-dot wait"; urlStatus.textContent = t("home.checking");
     const result = await checkReach(url);
     if (url !== urlInput.value.trim()) return;
@@ -118,28 +124,18 @@ function newAuditSheet(preset) {
     if (nameInput.value.trim()) out.name = nameInput.value.trim();
     return out;
   }
-  function cli() {
-    const b = body();
-    const parts = ["ui-audit audit"];
-    if (b.config) parts.push(`--config ${shellQuote(b.config)}`);
-    if (b.base_url && b.base_url !== configInfo().base_url) parts.push(`--base-url ${shellQuote(b.base_url)}`);
-    if (b.mode === "quick") parts.push("--fast");
-    for (const r of b.routes || []) parts.push(`--route ${shellQuote(r)}`);
-    if (b.widths && b.widths.length) parts.push(`--width ${b.widths.join(",")}`);
-    if (b.storage_state) parts.push(`--storage-state ${shellQuote(b.storage_state)}`);
-    if (b.locale) parts.push(`--locale ${shellQuote(b.locale)}`);
-    if (!b.states) parts.push("--no-states");
-    if (!b.annotate) parts.push("--no-annotate");
-    if (b.changed_since) parts.push(`--changed-since ${shellQuote(b.changed_since)}`);
-    if (b.name) parts.push(`--output ${shellQuote(S.state.runs_dir + "/" + b.name)}`);
-    return parts.join(" \\\n  ");
-  }
+  // The same audit on the command line; the server writes it, with the CLI's quoting.
+  let commandText = "";
+  const showCommand = debounce(async () => {
+    try { commandText = (await api("command", body())).command; } catch (_) { commandText = ""; }
+    command.firstChild.textContent = commandText;
+    command.hidden = !commandText;
+  }, 150);
   function sync() {
     for (const button of modeButtons) button.setAttribute("aria-pressed", String(button.dataset.mode === form.mode));
     pagesBox.hidden = form.mode !== "pages";
     changedField.hidden = form.mode === "pages";
-    command.textContent = cli();
-    command.append(h("button", { type: "button", class: "btn ghost icon sm", "aria-label": t("action.copy"), onClick: () => copy(cli().replace(/ \\\n {2}/g, " ")) }, icon("copy")));
+    showCommand();
     footNote();
   }
 
@@ -159,7 +155,7 @@ function newAuditSheet(preset) {
       await refreshState();
       go({ view: "home" });
     } catch (error) {
-      submitError = t("na.failed", { error: error.message });
+      submitError = t("na.failed", { error: errorText(error) });
       footNote();
       start.disabled = false;
     }
@@ -193,14 +189,14 @@ function newAuditSheet(preset) {
     go2.addEventListener("click", async () => {
       go2.disabled = true;
       let job;
-      try { job = await api("login", { config: configSelect.value, base_url: urlInput.value.trim(), path: pathInput.value.trim() || "/" }); } catch (error) { toast("bad", error.message); go2.disabled = false; return; }
+      try { job = await api("login", { config: configSelect.value, base_url: urlInput.value.trim(), path: pathInput.value.trim() || "/" }); } catch (error) { toast("bad", errorText(error)); go2.disabled = false; return; }
       const done = h("button", { type: "button", class: "btn primary sm" }, icon("check"), t("na.login.done"));
       const stop = h("button", { type: "button", class: "btn sm" }, t("action.cancel"));
       loginBox.replaceChildren(h("div", {}, h("b", { text: t("na.login.waiting") })), h("div", { class: "help", text: t("na.login.waitingHelp") }), h("div", { class: "row" }, done, stop));
       stop.addEventListener("click", async () => { await api(`jobs/${job.id}/cancel`, {}).catch(() => null); loginBox.hidden = true; });
       done.addEventListener("click", async () => {
         done.disabled = true;
-        try { await api(`jobs/${job.id}/continue`, {}); } catch (error) { toast("bad", error.message); done.disabled = false; return; }
+        try { await api(`jobs/${job.id}/continue`, {}); } catch (error) { toast("bad", errorText(error)); done.disabled = false; return; }
         for (let n = 0; n < 40; n++) {
           await new Promise((r) => setTimeout(r, 500));
           const state = await api("state");
@@ -212,7 +208,7 @@ function newAuditSheet(preset) {
             toast("good", t("toast.signedIn", { file: current.result.session }));
             return;
           }
-          if (current && (current.status === "failed" || current.status === "cancelled")) { toast("bad", current.error || t("job.failed")); loginBox.hidden = true; return; }
+          if (current && (current.status === "failed" || current.status === "cancelled")) { toast("bad", jobError(current, t("job.failed"))); loginBox.hidden = true; return; }
         }
       });
     });

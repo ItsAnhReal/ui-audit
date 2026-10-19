@@ -146,7 +146,7 @@ def find(report: dict, ident: str) -> tuple[dict | None, list[dict]]:
     raise LookupError(f"no group or issue with the id {ident} in this run")
 
 
-def recheck_command(report: dict, run_dir: Path, issues: list[dict]) -> str:
+def recheck_command(report: dict, run_dir: Path | str, issues: list[dict]) -> str:
     """A targeted rerun of these findings plus the comparison; the same command the viewer copies."""
     from .server import recheck_widths
 
