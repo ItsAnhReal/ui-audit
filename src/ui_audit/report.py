@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from datetime import date
 from importlib import resources
 from pathlib import Path
@@ -43,16 +44,26 @@ def audited_routes(report: dict) -> list[dict]:
 
 
 # Fields the viewer reads. Rects and DOM hints stay in report.json only.
-_ISSUE_FIELDS = ("id", "group", "accepted", "check", "severity", "origin", "route", "state", "selector", "message", "widths",
-                 "evidence", "also_in_states", "browsers")
+_ISSUE_FIELDS = ("id", "group", "accepted", "check", "severity", "origin", "route", "state", "selector", "message",
+                 "message_key", "message_params", "widths", "evidence", "also_in_states", "browsers")
 _REPORT_FIELDS = ("version", "created", "base_url", "project_root", "output_dir", "locale", "browsers", "routes", "skipped_dynamic_routes",
                   "truncated_routes", "consent_dismissed", "states", "breakpoints", "captures", "errors", "stats", "only_routes")
 
 
-def viewer_data(report: dict) -> dict:
+def viewer_data(report: dict, run_dir: str | None = None) -> dict:
+    """What the viewer reads about a run in the folder `run_dir` (default: the report's output_dir)."""
+    from .summary import recheck_command
+
     data = {key: report[key] for key in _REPORT_FIELDS if key in report}
     groups = assign_groups(report["issues"])  # reports written before grouping existed get it here
-    data["groups"] = [{key: g[key] for key in ("id", "check", "severity", "source", "count", "routes")} for g in groups]
+    # The commands the viewer copies are worked out here, once, with the same quoting and
+    # re-check widths as the CLI and the app's server.
+    directory = (run_dir or report.get("output_dir") or ".").rstrip("/") or "."
+    by_id = {i["id"]: i for i in report["issues"]}
+    data["groups"] = [{**{key: g[key] for key in ("id", "check", "severity", "source", "count", "routes")},
+                       "recheck": recheck_command(report, directory, [by_id[i] for i in g["issue_ids"]])} for g in groups]
+    data["accept_command"] = f'ui-audit accept {shlex.quote(directory)} {{id}} --reason "why this is fine"'
+    in_groups = {i: g["count"] for g in groups for i in g["issue_ids"]}
     config = report.get("config") or {}
     data["config"] = {"viewports": config.get("viewports", {}), "sweep": (config.get("states") or {}).get("sweep", "full"),
                       "signed_in": bool(config.get("storage_state"))}
@@ -66,10 +77,26 @@ def viewer_data(report: dict) -> dict:
          "rects": {w: r for w, r in (issue.get("rects") or {}).items()
                    if w in shot_widths.get((issue["route"], issue["state"]), ())},
          "source_candidates": [{"file": c["file"], "line": c.get("line"), "reasons": c.get("reasons", [])[:3]}
-                               for c in issue.get("source_candidates", [])[:3]]}
+                               for c in issue.get("source_candidates", [])[:3]],
+         # one finding of a larger group can be re-checked on its own; alone, its group's command is the same
+         **({"recheck": recheck_command(report, directory, [issue])} if in_groups.get(issue["id"], 1) > 1 else {})}
         for issue in report["issues"]
     ]
     return data
+
+
+# The viewer's script files in ui/app/, in the order they are joined. Each is a part of one
+# function body: later files use what earlier ones define, and main.js starts the page.
+APP_SCRIPTS = ("core.js", "text.js", "model.js", "dom.js", "state.js", "shell.js", "home.js", "new-audit.js",
+               "run.js", "findings.js", "detail.js", "compare.js", "main.js")
+
+
+def app_script(names: tuple[str, ...] = APP_SCRIPTS, tail: str = "") -> str:
+    """The viewer's script: the files joined inside one function, so they share a scope
+    without a module loader (the static report opens from file://). `tail` runs last, inside."""
+    folder = resources.files("ui_audit").joinpath("ui", "app")
+    body = "\n".join(f"// ---- {name}\n{folder.joinpath(name).read_text(encoding='utf-8')}" for name in names)
+    return f'(() => {{\n"use strict";\n{body}\n{tail}\n}})();\n'
 
 
 def page(report: dict | None = None, app: dict | None = None) -> str:
@@ -83,7 +110,7 @@ def page(report: dict | None = None, app: dict | None = None) -> str:
 
     parts = {
         "/*__STYLE__*/": ui.joinpath("app.css").read_text(encoding="utf-8"),
-        "/*__SCRIPT__*/": ui.joinpath("i18n.js").read_text(encoding="utf-8") + "\n" + ui.joinpath("app.js").read_text(encoding="utf-8"),
+        "/*__SCRIPT__*/": ui.joinpath("i18n.js").read_text(encoding="utf-8") + "\n" + app_script(),
         "__REPORT_DATA__": inline(report),
         "__APP_CONFIG__": inline(app),
     }

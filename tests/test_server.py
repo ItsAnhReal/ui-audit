@@ -2,6 +2,7 @@
 
 import json
 import re
+import shlex
 import threading
 import urllib.error
 import urllib.request
@@ -230,6 +231,92 @@ def test_sessions_are_listed_without_their_contents(tmp_path):
     assert "s3cr3t" not in json.dumps(sessions)
     with pytest.raises(ApiError):
         Workspace(project).session_file("../auth.json")
+
+
+def test_errors_carry_a_code_the_page_translates(app):
+    server, _ = app
+    status, data, _ = call(server, "/api/runs", {"mode": "everything"})
+    assert status == 400 and data["code"] == "badMode" and data["params"] == {}
+    data = call(server, "/api/runs/nope-20260101/again", {})[1]
+    assert data["code"] == "noRun" and data["params"] == {"name": "nope-20260101"}
+    assert call(server, "/api/state", token=False)[1]["code"] == "badToken"
+    assert call(server, "/api/nothing")[1]["code"] == "notFound"
+
+
+def test_jobs_report_failures_as_codes_and_count_their_log_lines():
+    from ui_audit.server import Job, Jobs
+
+    job = Job("audit", "shop-1", {})
+    jobs = Jobs.__new__(Jobs)  # no worker thread: only the event handling
+    for n in range(3):
+        jobs._line(job, json.dumps({"event": "log", "message": f"line {n}"}))
+    jobs._line(job, json.dumps({"event": "error", "message": "config error: x", "code": "config", "params": {"detail": "x"}}))
+    public = job.public()
+    assert public["log_count"] == 4 and public["log"][-1] == "config error: x"
+    assert (public["error"], public["error_code"], public["error_params"]) == ("config error: x", "config", {"detail": "x"})
+
+
+def test_the_command_line_matches_the_new_audit(app):
+    server, _ = app
+    body = {"config": "ui-audit.toml", "base_url": "http://localhost:3000", "mode": "pages", "routes": ["/a b", "/c"],
+            "widths": ["390", "768"], "locale": "de", "states": False, "annotate": True, "name": "it's mine"}
+    command = call(server, "/api/command", body)[1]["command"]
+    assert command.split(" \\\n  ") == [
+        "ui-audit audit", "--config ui-audit.toml", "--route '/a b'", "--route /c", "--width 390,768", "--locale de",
+        "--no-states", "--output '.ui-audit/it'\"'\"'s mine'"]  # the settings file's own address is left out
+    quick = call(server, "/api/command", {"config": "", "base_url": "http://127.0.0.1:5173", "mode": "quick"})[1]["command"]
+    assert quick == "ui-audit audit \\\n  --base-url http://127.0.0.1:5173 \\\n  --fast \\\n  --no-annotate"
+
+
+def test_discovery_tries_the_usual_ports_on_this_computer_only(app, monkeypatch):
+    import http.server
+
+    from ui_audit import server as server_mod
+
+    dev = http.server.ThreadingHTTPServer(("127.0.0.1", 0), http.server.SimpleHTTPRequestHandler)
+    threading.Thread(target=dev.serve_forever, daemon=True).start()
+    asked = []
+    real = server_mod.Api.check_url
+    monkeypatch.setattr(server_mod.Api, "check_url", lambda self, url, timeout=4: (asked.append(url), real(self, url, timeout))[1])
+    monkeypatch.setattr(server_mod, "COMMON_PORTS", (dev.server_address[1], 9))
+    try:
+        found = call(app[0], "/api/discover")[1]
+    finally:
+        dev.shutdown()
+        dev.server_close()
+    assert found == {"found": [f"http://127.0.0.1:{dev.server_address[1]}"], "ports": [dev.server_address[1], 9]}
+    assert all(url.startswith("http://127.0.0.1:") for url in asked)
+
+
+def test_json_files_are_read_again_only_when_they_change(tmp_path, monkeypatch):
+    project = tmp_path / "shop"
+    project.mkdir()
+    (project / "package-lock.json").write_text(json.dumps({"lockfileVersion": 3}))
+    (project / "auth.json").write_text(json.dumps({"cookies": [], "origins": [{"origin": "http://a.test"}]}))
+    workspace = Workspace(project)
+    reads = []
+    real = json.loads
+    monkeypatch.setattr(json, "loads", lambda text, **kw: (reads.append(1), real(text, **kw))[1])
+    assert [s["path"] for s in workspace.sessions()] == ["auth.json"]
+    assert len(reads) == 2
+    workspace.sessions()
+    assert len(reads) == 2  # nothing changed, nothing read
+    (project / "auth.json").write_text(json.dumps({"cookies": [], "origins": [{"origin": "http://b.test"}]}) + " ")
+    assert workspace.sessions()[0]["origins"] == ["http://b.test"] and len(reads) == 3
+
+
+def test_the_viewer_gets_its_commands_from_the_report(tmp_path):
+    project = tmp_path / "shop"
+    folder = make_run(project / ".ui-audit", "shop-1", project,
+                      [issue(1), issue(2, route="/b c", widths=(500,)), issue(3, check="small-target")])
+    data = report.viewer_data(report.read_json(folder), str(folder))
+    groups = {g["id"]: g for g in data["groups"]}
+    spill = next(i for i in data["issues"] if i["id"] == "i1")
+    assert len(groups[spill["group"]]["recheck"].splitlines()) == 2 and "--route '/b c'" in groups[spill["group"]]["recheck"]
+    assert spill["recheck"].startswith(f"ui-audit audit --like {shlex.quote(str(folder))} --route / --width 389,390,400,401 --no-states")
+    alone = next(i for i in data["issues"] if i["id"] == "i3")
+    assert "recheck" not in alone  # its group's command is the same
+    assert data["accept_command"] == f'ui-audit accept {shlex.quote(str(folder))} {{id}} --reason "why this is fine"'
 
 
 def test_the_page_has_no_unfilled_placeholders():

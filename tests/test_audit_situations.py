@@ -80,7 +80,8 @@ def test_a_section_that_never_fades_in_makes_the_page_doubtful(demo_site, tmp_pa
     url, site = demo_site
     report = run(site, url, tmp_path, {"ghost.html": NEVER_SHOWN}, [1366])
     route = next(r for r in report["routes"] if r["path"] == "/ghost.html")
-    assert route["content"] == {"state": "hidden", "detail": "1 section stays invisible"}
+    assert route["content"] == {"state": "hidden", "detail": "1 section stays invisible", "detail_key": "hiddenDetail",
+                                "detail_params": {"n": 1}}
 
 
 FEED = '<?xml version="1.0"?><rss version="2.0"><channel><title>Blog</title><link>https://example.com/</link></channel></rss>'
