@@ -13,7 +13,7 @@ Discover → Sweep → Capture → Diagnose → Map to code → Patch → Target
 ## Try it in a minute
 
 ```bash
-pipx install --include-deps ui-audit   # Python 3.11+; until 0.1.0 is on PyPI, see Install
+pipx install --include-deps ui-audit   # Python 3.11+
 playwright install chromium
 ui-audit demo                          # serves the bundled demo site, audits it, opens the report
 ```
@@ -31,7 +31,7 @@ Responsive bugs live *between* presets: a grid that overflows from 800 to 946 px
 ## Install
 
 ```bash
-pipx install --include-deps ui-audit   # from PyPI once 0.1.0 is published; until then: pipx install --include-deps git+https://github.com/ItsAnhReal/ui-audit
+pipx install --include-deps ui-audit   # or the latest main: pipx install --include-deps git+https://github.com/ItsAnhReal/ui-audit
 playwright install chromium            # or point --browser-path / UI_AUDIT_BROWSER_PATH at an existing Chromium
 ```
 
@@ -272,7 +272,7 @@ jobs:
           path: ui-audit-report
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
-      - uses: ItsAnhReal/ui-audit@main
+      - uses: ItsAnhReal/ui-audit@v0
         with:
           comment-file: ui-audit-report/summary.md
 ```
