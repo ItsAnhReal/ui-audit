@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.1.0 — first public release
 
 - `ui-audit audit`: route discovery (config, framework conventions, sitemap, crawl), conservative state discovery, a full width sweep with boundary refinement, bounded screenshots, findings grouped by cause, source hints, and a content check for pages that measure clean for the wrong reason.
