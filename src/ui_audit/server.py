@@ -727,7 +727,7 @@ class Api:
         else:
             default_base = (Path(cfg.project_root).name if config_file else ws.root.name) or "audit"
         base = str(body.get("name") or default_base)
-        return self._submit("audit", cfg.to_dict(), routes, title=base, base=base, extra=extra)
+        return self._submit("audit", cfg.to_dict(redact=False), routes, title=base, base=base, extra=extra)
 
     def run_again(self, name: str) -> dict:
         report = self.workspace.report(name)

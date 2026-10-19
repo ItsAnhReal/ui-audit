@@ -674,7 +674,9 @@
     const vw = document.documentElement.clientWidth || window.innerWidth;
     const issues = [];
     const counts = {};
+    const disabled = new Set(opts.disable || []);
     const push = (issue) => {
+      if (disabled.has(issue.check)) return;
       counts[issue.check] = (counts[issue.check] || 0) + 1;
       if (counts[issue.check] <= maxPer) issues.push(finishIssue(issue));
     };
@@ -954,6 +956,40 @@
     };
   }
 
+  // What a rule file returned, as probe findings: each item names an element or a selector, a
+  // message and optionally a severity. The check name and `origin: "rule"` come from here.
+  function ruleFindings(opts, found) {
+    pathCache = new Map();
+    styleCache = new Map();
+    try {
+      const ignore = opts.ignoreSelectors || [];
+      const maxPer = opts.maxPerCheck ?? 15;
+      const issues = [];
+      let count = 0;
+      for (const item of Array.isArray(found) ? found : []) {
+        if (!item || typeof item !== "object") continue;
+        let el = item.element instanceof Element ? item.element : null;
+        const named = typeof item.selector === "string" && item.selector ? item.selector : null;
+        if (!el && named) {
+          try { el = document.querySelector(named); } catch (e) { el = null; }
+        }
+        if ((!el && !named) || (el && isIgnored(el, ignore))) continue;
+        if (++count > maxPer) continue;
+        const severity = ["P1", "P2", "P3"].includes(item.severity) ? item.severity : "P2";
+        const message = String(item.message || opts.check).slice(0, 300);
+        const issue = el ? finishIssue({ check: opts.check, severity, el, message })
+          : { check: opts.check, severity, selector: named, message, hints: {} };
+        if (named) issue.selector = named;
+        issue.origin = "rule";
+        issues.push(issue);
+      }
+      return { issues, count };
+    } finally {
+      pathCache = null;
+      styleCache = null;
+    }
+  }
+
   function breakpoints() {
     const found = new Set();
     const toPx = (value, unit) => Math.round(parseFloat(value) * (unit === "px" ? 1 : 16));
@@ -1152,6 +1188,6 @@
   }
 
   window.__uiAudit = {
-    probe, viewportMeta, breakpoints, stateCandidates, consentDecline, contentState, sourceFiles, domFingerprint, pageFingerprint, isTriggerVisible, layerInfo, annotate, clearAnnotations,
+    probe, ruleFindings, viewportMeta, breakpoints, stateCandidates, consentDecline, contentState, sourceFiles, domFingerprint, pageFingerprint, isTriggerVisible, layerInfo, annotate, clearAnnotations,
   };
 })();

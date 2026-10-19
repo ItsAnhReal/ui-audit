@@ -108,14 +108,30 @@ def runtime_key(detail: str) -> str:
     return text
 
 
-class IssueSet:
-    """Accumulates observations into aggregated issues."""
+def configure(result: dict, disabled: set[str] | list[str], severity: dict[str, str]) -> dict:
+    """A probe result as `[checks] disable` and `severity` want it: findings of turned-off checks
+    removed (also from `truncated`), configured severities in place of measured ones."""
+    if disabled:
+        result["issues"] = [i for i in result["issues"] if i["check"] not in disabled]
+        result["truncated"] = {c: n for c, n in (result.get("truncated") or {}).items() if c not in disabled}
+    for issue in result["issues"]:
+        issue["severity"] = severity.get(issue["check"], issue["severity"])
+    return result
 
-    def __init__(self) -> None:
+
+class IssueSet:
+    """Accumulates observations into aggregated issues. Findings of `disabled` checks are
+    dropped, and `severity` replaces the rated severity of the checks it names."""
+
+    def __init__(self, disabled: list[str] | None = None, severity: dict[str, str] | None = None) -> None:
         self._issues: dict[str, dict] = {}
         self._measured: dict[str, str] = {}
+        self._disabled = set(disabled or ())
+        self._severity = dict(severity or {})
 
-    def observe(self, raw: dict, route: str, state: str, width: int, engine: str = "chromium") -> dict:
+    def observe(self, raw: dict, route: str, state: str, width: int, engine: str = "chromium") -> dict | None:
+        if raw["check"] in self._disabled:
+            return None
         sig = signature(raw["check"], route, state, raw["selector"])
         issue = self._issues.get(sig)
         if issue is None:
@@ -124,7 +140,8 @@ class IssueSet:
                 "signature": sig,
                 "check": raw["check"],
                 "severity": raw["severity"],
-                "origin": "deterministic",
+                # "rule" for findings of a rule file in [checks] rules.
+                "origin": raw.get("origin") or "deterministic",
                 "route": route,
                 "state": state,
                 "selector": raw["selector"],
@@ -145,7 +162,7 @@ class IssueSet:
         if width not in issue["widths"]:
             issue["widths"].append(width)
             issue["widths"].sort()
-        issue["severity"] = rated(issue["check"], measured, issue["widths"])
+        issue["severity"] = self._severity.get(issue["check"]) or rated(issue["check"], measured, issue["widths"])
         if engine not in issue["browsers"]:
             issue["browsers"].append(engine)
         seen_at = issue["widths_by_browser"].setdefault(engine, [])
@@ -160,7 +177,7 @@ class IssueSet:
         return issue
 
     def runtime(self, check: str, route: str, state: str, detail: str, width: int, hints: dict | None = None,
-                engine: str = "chromium") -> dict:
+                engine: str = "chromium") -> dict | None:
         severity = "P2"
         raw = {"check": check, "severity": severity, "selector": runtime_key(detail)[:120], "message": detail, "hints": hints}
         return self.observe(raw, route, state, width, engine)

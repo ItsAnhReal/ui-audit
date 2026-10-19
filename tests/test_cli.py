@@ -272,3 +272,14 @@ def test_every_route_sent_to_the_sign_in_page_fails_the_audit(app, tmp_path, cap
     assert f"4 of 4 routes ended on {url}/login" in err and "storage_state expired" in err
     report = json.loads((tmp_path / "run" / "report.json").read_text())
     assert {r["landed"] for r in report["routes"]} == {"/login"}
+
+
+def test_a_missing_rule_file_or_variable_is_a_config_error(tmp_path, capsys, monkeypatch):
+    config = tmp_path / "ui-audit.toml"
+    config.write_text('[checks]\nrules = ["rules/none.js"]\n', encoding="utf-8")
+    assert main(["audit", "--config", str(config), "--output", str(tmp_path / "run")]) == 2
+    assert "config error: checks.rules: cannot read" in capsys.readouterr().err
+    monkeypatch.delenv("UI_AUDIT_UNSET", raising=False)
+    config.write_text('base_url = "${UI_AUDIT_UNSET}"\n', encoding="utf-8")
+    assert main(["audit", "--config", str(config), "--output", str(tmp_path / "run")]) == 2
+    assert "environment variable UI_AUDIT_UNSET is not set (used in base_url)" in capsys.readouterr().err

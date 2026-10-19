@@ -168,7 +168,7 @@ def test_consent_banner_is_declined_once_and_setup_actions_run(demo_site, tmp_pa
     # The banner only exists on the second route; the optional cookies are turned down, never accepted.
     assert report["consent_dismissed"] == "Only necessary"
     assert report["coverage"]["/consent.html|default"] == [390]
-    assert report["errors"] == ["setup: action 1 could not run ({'click': '#no-such-button'})"]
+    assert report["errors"] == ["setup: step 1 (click '#no-such-button') failed: not on the page or not visible"]
 
     kept = audit.run(config(url, site, tmp_path / "kept", routes={"include": ["/consent.html"]},
                             states={"auto": False, "dismiss_consent": False}, viewports={"widths": [390]}),
@@ -269,7 +269,7 @@ def test_setup_actions_are_replayed_on_every_page(demo_site, tmp_path):
     report = audit.run(cfg, log=lambda _: None)
     assert not found(report, "horizontal-overflow", "/promo.html")
     # "/" has no promo: the failed first run is reported, the skipped replays are not.
-    assert report["errors"] == ["setup: action 1 could not run ({'click': '#close-promo'})"]
+    assert report["errors"] == ["setup: step 1 (click '#close-promo') failed: not on the page or not visible"]
 
     unset = audit.run(config(url, site, tmp_path / "unset", routes={"include": ["/promo.html"]},
                              states={"auto": False}, viewports={"widths": [390]}), log=lambda _: None)

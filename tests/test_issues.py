@@ -107,3 +107,22 @@ def test_auto_state_ids_leave_out_counts():
     assert auto_state_id("expand", "12") == "expand-expand"
     # Two triggers that read the same are told apart by their selector, not by discovery order.
     assert auto_state_id("expand", "More", "nav > button.more:nth-of-type(2)") == "expand-more-button-more"
+
+
+def test_disabled_checks_and_configured_severities():
+    from ui_audit.issues import configure
+
+    issues = IssueSet(disabled=["tiny-text"], severity={"horizontal-overflow": "P3"})
+    assert issues.observe(raw(check="tiny-text"), "/", "default", 390) is None
+    issues.observe(raw(severity="P1"), "/", "default", 390)
+    issues.observe({**raw(check="rule:autoplay", severity="P2"), "origin": "rule"}, "/", "default", 390)
+    by_check = {i["check"]: i for i in issues.all()}
+    assert set(by_check) == {"horizontal-overflow", "rule:autoplay"}
+    assert by_check["horizontal-overflow"]["severity"] == "P3"
+    assert by_check["horizontal-overflow"]["origin"] == "deterministic"
+    assert by_check["rule:autoplay"]["origin"] == "rule"
+
+    result = {"issues": [raw(check="tiny-text"), raw()], "truncated": {"tiny-text": 20, "small-target": 16}}
+    configure(result, {"tiny-text"}, {"horizontal-overflow": "P2"})
+    assert [i["check"] for i in result["issues"]] == ["horizontal-overflow"] and result["issues"][0]["severity"] == "P2"
+    assert result["truncated"] == {"small-target": 16}

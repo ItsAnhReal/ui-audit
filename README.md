@@ -46,6 +46,8 @@ ui-audit audit --output .ui-audit/baseline        # full audit
 ui-audit ui                                       # or do all of it in the local app (below)
 ```
 
+Every setting in `ui-audit.toml` is listed in the [configuration reference](https://github.com/ItsAnhReal/ui-audit/blob/main/docs/configuration.md).
+
 Outputs in the output directory:
 
 | File | What it is |
@@ -151,7 +153,7 @@ The three overflow checks are rated one step lower when the overflow is 4px or l
 
 A `horizontal-overflow` on an element names its cause where it is clear (a transform, a negative margin or offset, `100vw` that includes the scrollbar, a flex item that cannot shrink, a fixed or minimum width), in the message and as `cause` in report.json. When `overflow-x: hidden` on `html` or `body` hides the overflow, the message says the content is cut off rather than that the page scrolls.
 
-Deterministic findings are measurements. They can still be intentional; add those selectors to `[checks] ignore_selectors`.
+Deterministic findings are measurements. They can still be intentional; add those selectors to `[checks] ignore_selectors` (or to one route's `[[routes.overrides]]`). `[checks] disable` turns checks off, `[checks.severity]` rates a check differently, and `[checks] rules` adds checks of your own as small JavaScript files, reported as `rule:<name>` with `origin: rule`; see [the configuration reference](https://github.com/ItsAnhReal/ui-audit/blob/main/docs/configuration.md#rule-files).
 
 ## States
 
@@ -164,7 +166,7 @@ route = "/shop"
 actions = [{ click = "#cart" }, { wait_for = ".cart-drawer" }]
 ```
 
-Actions: `click`, `hover`, `fill` + `value`, `press`, `wait`, `wait_for`. For logged-in pages, save a Playwright storage state and set `storage_state`.
+Actions: `click`, `hover`, `fill` + `value`, `select` + `value`, `check`, `uncheck`, `press`, `scroll`, `goto`, `wait`, `wait_for`, `wait_for_url` ([details](https://github.com/ItsAnhReal/ui-audit/blob/main/docs/configuration.md#actions)). When a step fails, the state's status and `errors` name the step and why. For logged-in pages, save a Playwright storage state and set `storage_state`.
 
 ## Faster runs
 
@@ -175,7 +177,7 @@ A full audit sweeps every route and every opened menu, tab and dialog across the
 - `--no-annotate` saves each screenshot once instead of twice. The viewer draws the boxes itself; only the agent's review packet loses its annotated images.
 - `--workers N` (or `workers = N`) measures N routes at once, each in a browser of its own; `0` picks from the CPU count. Findings and their order are the same as with one. Routes are still found and compared one after another in the first browser, and the others start with its cookies and local storage. Leave it at 1 if the app rotates sign-in tokens on use: browsers sharing one session can sign each other out. The demo takes 43 s with one worker and 26 s with two.
 
-Analytics requests (Google Analytics, Plausible, Segment and similar) are turned away by default, so pages go idle sooner; `block_requests` lists more hosts to block, or `[]` to block none.
+Analytics requests (Google Analytics, Plausible, Segment and similar) are turned away by default, so pages go idle sooner; `block_requests` lists more hosts to block, or `[]` to block none. A failed request to an analytics, ad or tag-manager host is never reported as `failed-resource`.
 
 ## Languages
 
@@ -293,6 +295,8 @@ It exits 1 when `--fail-on` is met and 3 when the app or the audit could not run
 ui-audit login --path /auth          # opens a browser window; sign in, then press Enter in the terminal
 ui-audit audit --storage-state .ui-audit/auth.json
 ```
+
+A staging server behind basic auth or a preview token needs no login: set `http_credentials` or `headers` in `ui-audit.toml`, with the secret in an environment variable (`password = "${STAGING_PASSWORD}"`). Both are sent to the app's own origin only, and `report.json` keeps the `${VAR}`, never the value. `ignore_https_errors = true` accepts a self-signed certificate.
 
 `login` saves the browser's cookies and local storage to `.ui-audit/auth.json` (or `--save <file>`); set `storage_state` in `ui-audit.toml` to use it on every run. You type the password yourself, in the browser; `ui-audit` never sees or stores it. The saved file works like a password for that account, so keep `.ui-audit/` out of version control, and sign in again when the session expires. When most routes (at least three, and 80% of those that loaded) end on the same other page, `audit` names that page and exits 3 instead of reporting the sign-in page as everything.
 

@@ -6,6 +6,7 @@ import fnmatch
 import gzip
 import json
 import re
+import ssl
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -276,8 +277,19 @@ def routes_from_source(root: Path, samples: dict[str, str]) -> tuple[list[str], 
     return found, dynamic
 
 
-def _fetch(url: str, timeout: float) -> bytes:
-    with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310 - user-supplied local URL
+@dataclass
+class Fetch:
+    """How to ask the app for a file outside the browser: `headers` (and basic auth) as
+    configured, and whether an invalid certificate is accepted."""
+    headers: dict[str, str] = field(default_factory=dict)
+    insecure: bool = False
+
+
+def _fetch(url: str, timeout: float, how: Fetch | None = None) -> bytes:
+    how = how or Fetch()
+    context = ssl._create_unverified_context() if how.insecure else None  # noqa: S323 - ignore_https_errors
+    request = urllib.request.Request(url, headers=how.headers)
+    with urllib.request.urlopen(request, timeout=timeout, context=context) as response:  # noqa: S310 - the audited app
         data = response.read()
     return gzip.decompress(data) if data[:2] == b"\x1f\x8b" else data
 
@@ -288,13 +300,13 @@ def _on_audited_host(base_url: str, url: str) -> str:
     return urlparse(url)._replace(scheme=base.scheme, netloc=base.netloc).geturl()
 
 
-def robots_sitemaps(base_url: str, timeout: float = 5.0) -> list[str]:
+def robots_sitemaps(base_url: str, timeout: float = 5.0, how: Fetch | None = None) -> list[str]:
     """The sitemaps robots.txt names, moved to the audited host."""
     base = urlparse(base_url)
     robots = f"{base.scheme}://{base.netloc}/robots.txt"
     found: list[str] = []
     try:
-        for line in _fetch(robots, timeout).decode("utf-8", "ignore").splitlines():
+        for line in _fetch(robots, timeout, how).decode("utf-8", "ignore").splitlines():
             key, _, value = line.partition(":")
             if key.strip().lower() == "sitemap" and value.strip():
                 url = _on_audited_host(base_url, urljoin(robots, value.strip()))
@@ -305,12 +317,13 @@ def robots_sitemaps(base_url: str, timeout: float = 5.0) -> list[str]:
     return found
 
 
-def routes_from_sitemap(base_url: str, timeout: float = 5.0, errors: list[str] | None = None) -> list[str]:
+def routes_from_sitemap(base_url: str, timeout: float = 5.0, errors: list[str] | None = None,
+                        how: Fetch | None = None) -> list[str]:
     """Routes the app's sitemaps list. Sitemap indexes are followed a bounded number of levels and
     files. Entries naming another host (the production site) count by their path: the sitemaps
     are only ever fetched from the audited app. Problems go to `errors`; a missing sitemap is normal."""
     errors = [] if errors is None else errors
-    listed = robots_sitemaps(base_url, timeout)
+    listed = robots_sitemaps(base_url, timeout, how)
     default = urljoin(base_url.rstrip("/") + "/", "sitemap.xml")
     queue = [(url, 0) for url in listed + [default]]
     fetched: set[str] = set()
@@ -321,7 +334,7 @@ def routes_from_sitemap(base_url: str, timeout: float = 5.0, errors: list[str] |
             continue
         fetched.add(url)
         try:
-            tree = ET.fromstring(_fetch(url, timeout))
+            tree = ET.fromstring(_fetch(url, timeout, how))
         except urllib.error.HTTPError as exc:
             if exc.code != 404 or url != default or default in listed:  # no sitemap.xml at all is normal
                 errors.append(f"sitemap: HTTP {exc.code} for {urlparse(url).path}")
@@ -416,7 +429,8 @@ def discover(cfg, page=None, only: list[str] | None = None) -> Discovery:
         except OSError as exc:
             result.errors.append(f"source: {exc}")
     if "sitemap" in methods:
-        for path in routes_from_sitemap(cfg.base_url, errors=result.errors):
+        how = Fetch(cfg.request_headers(), cfg.ignore_https_errors)
+        for path in routes_from_sitemap(cfg.base_url, errors=result.errors, how=how):
             result.add(path, "sitemap")
     if "crawl" in methods and page is not None:
         for path in crawl(page, cfg.base_url, rc.crawl_depth, rc.max_routes * 2, rc.exclude):
