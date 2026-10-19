@@ -1,0 +1,10 @@
+<!-- expect: horizontal-overflow=1 -->
+<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>RTL</title><style>
+body { margin: 0; padding: 16px; font: 16px/1.5 sans-serif; }
+/* Wider than a phone: on a right-to-left page it sticks out, and scrolls, to the left. */
+.table { width: 560px; background: #eee; }
+</style></head><body>
+<h1>מחירים</h1>
+<p>כל התוכניות כוללות תמיכה ועדכונים.</p>
+<div class="table">טבלת השוואה רחבה של כל התוכניות</div>
+</body></html>

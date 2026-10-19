@@ -21,6 +21,8 @@ DETERMINISTIC_CHECKS = {
     "offscreen-content": "Text or content is partly outside the viewport.",
     "clipped-content": "A box with hidden overflow cuts off its content.",
     "text-spill": "Text overflows its box visibly.",
+    "text-overlap": "Text is drawn over other text.",
+    "dialog-too-tall": "A dialog reaches past the screen and cannot be scrolled.",
     "overlapping-controls": "Two interactive controls overlap.",
     "small-target": "A pointer target is smaller than the minimum size.",
     "unnamed-control": "A control has no accessible name.",
@@ -165,16 +167,22 @@ class IssueSet:
         raw = {"check": check, "severity": severity, "selector": runtime_key(detail)[:120], "message": detail, "hints": hints}
         return self.observe(raw, route, state, width, engine)
 
-    def all(self) -> list[dict]:
+    def all(self, parents: dict[tuple[str, str], str] | None = None) -> list[dict]:
         """Aggregated issues. A defect that already shows in the default state is
-        reported once there, with the other states it appears in listed."""
-        defaults = {(i["check"], i["route"], i["selector"]): i for i in self._issues.values() if i["state"] == "default"}
-        for issue in defaults.values():
+        reported once there, with the other states it appears in listed. One that shows in
+        a state nested in another (`parents`: (route, state) → the state it opens from) and
+        in that other state is reported there."""
+        parents = parents or {}
+        by_state = {(i["check"], i["route"], i["state"], i["selector"]): i for i in self._issues.values()}
+        for issue in by_state.values():
             issue["also_in_states"] = []
         kept = []
         for issue in self._issues.values():
-            twin = defaults.get((issue["check"], issue["route"], issue["selector"]))
-            if issue["state"] != "default" and twin is not None:
+            twin = None
+            if issue["state"] != "default":
+                for home in ("default", parents.get((issue["route"], issue["state"]))):
+                    twin = twin or (by_state.get((issue["check"], issue["route"], home, issue["selector"])) if home else None)
+            if twin is not None:
                 twin["also_in_states"].append(issue["state"])
                 continue
             kept.append(issue)

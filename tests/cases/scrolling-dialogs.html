@@ -1,0 +1,16 @@
+<!-- expect: clean -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Dialogs that scroll</title><style>
+body { margin: 0; font: 16px/1.5 sans-serif; }
+/* A dialog that scrolls inside itself. */
+.capped { position: fixed; top: 16px; left: 16px; width: 40%; max-height: calc(100vh - 32px); overflow-y: auto; background: #fff; border: 1px solid #999; }
+/* A dialog in an overlay that scrolls, as most dialog libraries make them. */
+.overlay { position: fixed; top: 0; right: 0; bottom: 0; width: 45%; overflow-y: auto; }
+.overlay [role=dialog] { margin: 16px; background: #fff; border: 1px solid #999; }
+/* A dialog in the page's flow scrolls with the page. */
+.inline { margin: 16px; width: 40%; border: 1px solid #999; }
+.long { height: 1200px; }
+</style></head><body>
+<div class="capped" role="dialog" aria-label="Capped"><div class="long">Long content</div><button>Close capped</button></div>
+<div class="overlay"><div role="dialog" aria-label="In overlay"><div class="long">Long content</div><button>Close overlay</button></div></div>
+<div class="inline" role="dialog" aria-label="Inline"><div class="long">Long content</div><button>Close inline</button></div>
+</body></html>

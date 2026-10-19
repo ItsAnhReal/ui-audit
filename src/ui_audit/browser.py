@@ -247,6 +247,9 @@ def load(page, base_url: str, path: str, width: int, height: int, settle_ms: int
     if routes.same_document(page.url, url):
         page.goto("about:blank")  # changing only the fragment does not reload; a hash route starts fresh
     response = page.goto(url, wait_until="load", timeout=30000)
+    # The pointer stays where the last click on the page before left it, and a menu that opens
+    # on hover would open under it. Every page starts with it in the top-left corner.
+    page.mouse.move(0, 0)
     try:
         page.wait_for_load_state("networkidle", timeout=5000)
     except Exception:  # noqa: BLE001 - long-polling apps never go idle
@@ -317,6 +320,18 @@ def reveal(page, settle_ms: int) -> None:
             settle(page, settle_ms)
     except Exception:  # noqa: BLE001 - a page that navigates while scrolling is measured as it is
         pass
+
+
+def fetch_text(page, url: str, timeout_ms: int = 5000) -> str | None:
+    """A text resource fetched with the page's cookies but outside the page, so CORS does not
+    apply; None if it cannot be had."""
+    if urlparse(url).scheme not in ("http", "https"):
+        return None
+    try:
+        response = page.request.get(url, timeout=timeout_ms)
+        return response.text() if response.ok else None
+    except Exception:  # noqa: BLE001 - a stylesheet that cannot be fetched adds no breakpoints
+        return None
 
 
 def resize(page, width: int, height: int, settle_ms: int) -> None:

@@ -1,0 +1,26 @@
+<!-- expect: clipped-content=2 -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Shadow root</title><style>
+body { margin: 0; padding: 16px; font: 16px/1.5 sans-serif; }
+</style></head><body>
+<!-- A price cut off inside a component's shadow root, and a label cut off by the box its slot sits in. -->
+<price-tag></price-tag>
+<label-chip><span>Recommended for growing teams</span></label-chip>
+<!-- A component whose content fits. -->
+<label-chip><span>New</span></label-chip>
+<script>
+customElements.define("price-tag", class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" }).innerHTML =
+      '<style>.amount { display: block; width: 70px; overflow: hidden; white-space: nowrap; }</style><span class="amount">$1,299.00 per month</span>';
+  }
+});
+customElements.define("label-chip", class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" }).innerHTML =
+      '<style>.chip { display: inline-block; max-width: 90px; overflow: hidden; white-space: nowrap; }</style><span class="chip"><slot></slot></span>';
+  }
+});
+</script>
+</body></html>

@@ -1,6 +1,8 @@
 """End-to-end runs against the deliberately broken demo app (see demo/README.md)."""
 
+import http.server
 import os
+import threading
 
 import pytest
 
@@ -376,3 +378,123 @@ def test_overflow_message_names_the_cause(demo_site, tmp_path):
         assert clause in issue["message"], (name, issue["message"])
         assert name == "clipped.html" or issue["cause"] in issue["message"]
     assert "scrolls sideways" not in found(report, "horizontal-overflow", "/clipped.html")[0]["message"]
+
+
+@pytest.fixture
+def cdn():
+    """A second origin serving a stylesheet without CORS headers, as many CDNs do."""
+    css = b"@media (min-width: 720px) { p { color: red } } @container (width >= 1180px) { p { color: blue } }"
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("content-type", "text/css")
+            self.end_headers()
+            self.wfile.write(css)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}"
+    server.shutdown()
+    server.server_close()
+
+
+def test_breakpoints_of_a_stylesheet_from_another_origin_are_read(demo_site, cdn, tmp_path):
+    url, site = demo_site
+    (site / "cdn.html").write_text(f'<!doctype html><html lang="en"><head><meta charset="utf-8"><title>CDN</title>'
+                                   f'<link rel="stylesheet" href="{cdn}/theme.css"></head><body><p>Styled from a CDN.</p></body></html>')
+    cfg = config(url, site, tmp_path / "run", routes={"include": ["/cdn.html"]}, states={"auto": False},
+                 viewports={"widths": [390]})
+    assert audit.run(cfg, log=lambda _: None)["breakpoints"] == [720, 1180]
+
+
+def test_widgets_and_rtl_pages_show_their_planted_defects(demo_site, tmp_path):
+    url, site = demo_site
+    cfg = config(url, site, tmp_path / "run", routes={"include": ["/widgets.html", "/rtl.html"]},
+                 viewports={"widths": [390, 1366]})
+    report = audit.run(cfg, log=lambda _: None)
+    route = "/widgets.html"
+    # The terms button names its dialog with aria-controls only, and still opens a state.
+    assert {s["id"]: s["status"] for s in report["states"] if s["route"] == route} == {
+        "default": "audited", "dialog-view-terms": "audited"}
+
+    [badge] = found(report, "clipped-content", route)
+    assert badge["selector"] == "plan-badge.promo >> span.label" and badge["widths"] == [390, 1366]
+    [meter] = found(report, "horizontal-overflow", route)
+    assert meter["selector"] == "iframe.usage >> internal:control=enter-frame >> div.meter" and meter["widths"] == [390]
+    assert "frame scrolls sideways" in meter["message"]
+    [overlap] = found(report, "text-overlap", route)
+    assert overlap["selector"] == "p.tagline" and overlap["widths"] == [390]
+    [spill] = found(report, "text-spill", route)
+    assert spill["selector"] == "div.notice" and spill["severity"] == "P2" and spill["widths"] == [390]
+    [tall] = found(report, "dialog-too-tall", route, "dialog-view-terms")
+    assert tall["selector"] == "#terms" and tall["severity"] == "P1" and tall["widths"] == [390, 1366]
+    assert sorted(i["check"] for i in report["issues"] if i["route"] == route) == [
+        "clipped-content", "dialog-too-tall", "horizontal-overflow", "text-overlap", "text-spill"]
+
+    [rtl] = [i for i in report["issues"] if i["route"] == "/rtl.html"]
+    assert rtl["check"] == "horizontal-overflow" and rtl["selector"] == "div.offer" and rtl["widths"] == [390]
+    assert "past the left edge" in rtl["message"]
+    for issue in report["issues"]:
+        assert issue["evidence"], issue["signature"]
+
+
+MENUS = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Menus</title><style>
+body { margin: 0; font: 16px/1.5 sans-serif; }
+nav > ul { display: flex; gap: 16px; margin: 0; padding: 8px 8px 8px 160px; list-style: none; }
+nav li { position: relative; }
+.submenu { display: none; position: absolute; left: 0; top: 100%; margin: 0; padding: 8px; list-style: none; background: #fff; border: 1px solid #ccc; }
+.has-menu:hover .submenu { display: block; }
+.submenu a { display: block; width: 110px; overflow: hidden; white-space: nowrap; }
+main { padding: 16px; }
+.dialog { position: fixed; top: 16px; left: 16px; right: 16px; padding: 16px; background: #fff; border: 1px solid #999; }
+.dialog .long { height: 1200px; }
+.fine { font-size: 10px; }
+</style></head><body>
+<nav><ul><li><a href="#home">Home</a></li><li class="has-menu"><a href="#resources">Resources</a>
+  <ul class="submenu"><li><a href="#docs">Documentation and guides</a></li></ul></li></ul></nav>
+<main><p>Release notes for every version, with what changed and what to do about it.</p>
+<p><button class="open" aria-controls="notes">Release notes</button></p></main>
+<div id="notes" class="dialog" role="dialog" aria-modal="true" aria-label="Release notes" hidden>
+  <button class="more" aria-expanded="false">Show details</button><p class="fine" hidden>Build 1234, released on the first of October.</p>
+  <div class="long">Everything that changed.</div><button class="close">Close</button>
+</div>
+<script>
+const notes = document.getElementById("notes"), more = notes.querySelector(".more");
+document.querySelector(".open").onclick = () => { notes.hidden = !notes.hidden; };
+notes.querySelector(".close").onclick = () => { notes.hidden = true; };
+document.addEventListener("keydown", (event) => { if (event.key === "Escape") notes.hidden = true; });
+more.onclick = () => {
+  const open = more.getAttribute("aria-expanded") !== "true";
+  more.setAttribute("aria-expanded", String(open));
+  notes.querySelector(".fine").hidden = !open;
+};
+</script></body></html>"""
+
+
+def test_hover_menus_and_disclosures_inside_an_opened_state_are_audited(demo_site, tmp_path):
+    url, site = demo_site
+    (site / "menus.html").write_text(MENUS)
+    cfg = config(url, site, tmp_path / "run", routes={"include": ["/menus.html"]}, viewports={"widths": [390, 1366]})
+    report = audit.run(cfg, log=lambda _: None)
+    route = "/menus.html"
+    states = {s["id"]: s for s in report["states"] if s["route"] == route}
+    assert {key: s["status"] for key, s in states.items()} == {
+        "default": "audited", "hover-resources": "audited", "dialog-release-notes": "audited", "expand-show-details": "audited"}
+    # The menu is hovered, never clicked, and hovered again at every width.
+    assert states["hover-resources"]["actions"] == [{"hover": "li.has-menu"}]
+    [menu] = found(report, "clipped-content", route, "hover-resources")
+    assert menu["widths"] == [390, 1366] and "Documentation" in menu["message"]
+    assert not found(report, "clipped-content", route)  # the pointer starts away from the menu
+    # The details button only shows in the dialog: its state opens the dialog first.
+    nested = states["expand-show-details"]
+    assert nested["parent"] == "dialog-release-notes" and nested["applies_to"] == "any"
+    assert nested["actions"] == [{"click": "button.open"}, {"click": "button.more"}]
+    assert [i["selector"] for i in found(report, "tiny-text", route, "expand-show-details")] == ["p.fine"]
+    # The dialog is too tall in both states; it is reported once, where it opens.
+    [tall] = found(report, "dialog-too-tall", route, "dialog-release-notes")
+    assert tall["also_in_states"] == ["expand-show-details"]
+    assert not found(report, "dialog-too-tall", route, "expand-show-details")

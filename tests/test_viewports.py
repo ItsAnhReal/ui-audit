@@ -11,6 +11,21 @@ def test_breakpoint_neighbors_are_clamped_to_range():
     assert viewports.breakpoint_neighbors([320, 1920], 320, 1920) == [320, 321, 1919, 1920]
 
 
+def test_css_breakpoints_read_media_and_container_queries():
+    css = """
+    @media screen and (min-width: 48em) { a { color: red } }
+    @media (600px <= width) and (width < 1200px) { a { color: red } }
+    /* @media (min-width: 999px) is a comment */
+    @container sidebar (min-inline-size: 20rem) { a { color: red } }
+    @MEDIA (MAX-WIDTH: 375PX) { a { color: red } }
+    @media print { a { width: 100px } }
+    @supports (width: 50px) { a { color: red } }
+    a { min-width: 300px; }
+    """
+    assert viewports.css_breakpoints(css) == [320, 375, 600, 768, 1200]
+    assert viewports.css_breakpoints("") == []
+
+
 def _step_probe(edge: int):
     calls = []
 

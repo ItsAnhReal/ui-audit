@@ -26,7 +26,7 @@ Responsive bugs live *between* presets: a grid that overflows from 800 to 946 px
 
 1. the four presets (390, 768, 1366, 1920)
 2. anomaly boundaries where defects appear or disappear
-3. neighbours of every CSS breakpoint the page declares (N−1, N, N+1)
+3. neighbours of every CSS breakpoint the page declares (N−1, N, N+1): `@media` and `@container` widths, also in range syntax (`600px <= width`), from every stylesheet, including those of shadow roots and from a CDN that the page itself may not read
 
 ## Install
 
@@ -134,7 +134,9 @@ The server listens on 127.0.0.1 only, answers only to `127.0.0.1` and `localhost
 | `horizontal-overflow` | P1 | The page scrolls sideways; reports the top-most element that sticks out, or the grid whose columns are wider than the grid itself |
 | `offscreen-control` / `offscreen-content` | P1 / P2 | A control or text is cut off at the viewport edge; not reported again when it is the same element (or grid) as a `horizontal-overflow` |
 | `clipped-content` | P2 | A box with hidden overflow cuts into the letters of its text (lost line spacing alone does not count; ellipsis and line-clamp are treated as intentional, and so are whole slides or drawer panels parked beside the visible one) |
-| `text-spill` | P3 | Text visibly overflows its box |
+| `text-spill` | P3 / P2 | Text visibly overflows its box sideways (P3), or runs out of the bottom of a box of fixed height onto the content after it (P2; text that spills into empty space, like an app root of `height: 100%` on a long page, is not reported) |
+| `text-overlap` | P2 | Lines of text from different elements are drawn over each other. Only the middle of a line counts, so tight line spacing does not; badges of up to three characters, controls (see `overlapping-controls`), dialogs and menus over the page, fixed or sticky bars, text under an opaque background and text a `text-spill` already explains are left out |
+| `dialog-too-tall` | P1 / P2 | A fixed dialog reaches past the top or bottom of the screen and neither it nor an overlay around it scrolls; P1 when a control is out of reach |
 | `overlapping-controls` | P2 | Two interactive controls overlap by ≥20% (menus and dialogs layered on purpose, including an opened menu next to its expanded button, fixed or sticky bars over scrolling content, buttons inside a text field, small actions laid over a larger row, and wrapped inline links are excluded) |
 | `small-target` | P2 below 768px, else P3 | Pointer target smaller than 24×24px and closer than the WCAG 2.5.8 spacing exception allows to another target; inline text links excluded |
 | `unnamed-control` | P2 | No accessible name |
@@ -147,6 +149,8 @@ The server listens on 127.0.0.1 only, answers only to `127.0.0.1` and `localhost
 | `distorted-image` / `broken-image` | P2 | An image drawn in an aspect ratio more than 5% off its picture (`object-fit` other than `fill` and SVG are fine), or one that did not load |
 | `semantic-*` | agent-assigned | Findings merged from the agent's review, labelled `origin: agent` |
 
+Checks look inside open shadow roots (web components such as Lit, Shoelace or Ionic) and same-origin iframes. A selector steps into a shadow root with ` >> ` (`plan-card >> span.price`) and into an iframe with ` >> internal:control=enter-frame >> `, as Playwright's own selectors do, so `page.locator(selector)` finds the element. Closed shadow roots and iframes from another origin cannot be read. On a right-to-left page (`dir="rtl"`), overflow to the left is what scrolls the page sideways and is reported as `horizontal-overflow`; content cut off at the right edge is `offscreen-content`.
+
 The three overflow checks are rated one step lower when the overflow is 4px or less, and one more step when it only occurs below 360px, the narrowest width most phones in use have. They are grouped as one cause in the report.
 
 A `horizontal-overflow` on an element names its cause where it is clear (a transform, a negative margin or offset, `100vw` that includes the scrollbar, a flex item that cannot shrink, a fixed or minimum width), in the message and as `cause` in report.json. When `overflow-x: hidden` on `html` or `body` hides the overflow, the message says the content is cut off rather than that the page scrolls.
@@ -155,7 +159,7 @@ Deterministic findings are measurements. They can still be intentional; add thos
 
 ## States
 
-Besides each route's initial state, `ui-audit` discovers states by clicking disclosure controls only: `aria-expanded`, `aria-haspopup`, tabs, `<details>`, and anything marked `data-ui-audit-state`. Discovery runs at 390 and 1280px, skips anything inside a form, navigating links, submit buttons and controls whose name sounds destructive (delete, pay, logout, …), and keeps a candidate only if the click changes the DOM without changing the URL. A state found at 1280px is opened from the narrowest swept width at which its control is shown. Anything else goes in `[[states.custom]]`:
+Besides each route's initial state, `ui-audit` discovers states by clicking disclosure controls only: `aria-expanded`, `aria-haspopup`, tabs, `<details>`, controls that open a dialog or popover (`aria-controls` naming a closed dialog, `popovertarget`, `commandfor`, Bootstrap's `data-bs-toggle="modal"`), and anything marked `data-ui-audit-state`, also inside open shadow roots. Items of a `nav` or menu bar with a hidden menu inside are hovered instead, and hovered again after each resize. Discovery runs at 390 and 1280px, skips anything inside a form, navigating links, submit buttons and controls whose name sounds destructive (delete, pay, logout, …), and keeps a candidate only if the click changes the DOM without changing the URL. Disclosures that only show inside an opened state (a submenu, a tab in a dialog) become states of their own that open the outer one first, one level deep; what both show is reported once, in the outer state. `max_per_route` counts them all. A state found at 1280px is opened from the narrowest swept width at which its control is shown. Anything else goes in `[[states.custom]]`:
 
 ```toml
 [[states.custom]]

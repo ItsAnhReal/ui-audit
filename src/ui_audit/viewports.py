@@ -8,6 +8,7 @@ bounded, explainable set of widths.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
@@ -34,6 +35,32 @@ def sweep_widths(min_width: int, max_width: int, step: int) -> list[int]:
     if widths[-1] != max_width:
         widths.append(max_width)
     return widths
+
+
+# What probe.js reads from the stylesheets the page can read: widths in @media and @container
+# conditions, as min-/max-width or -inline-size or in range syntax either way round.
+_QUERY_PRELUDE = re.compile(r"@(?:media|container)\b([^{;]*)\{", re.IGNORECASE)
+_QUERY_WIDTHS = (
+    re.compile(r"(?:min|max)-(?:width|inline-size)\s*:\s*([\d.]+)(px|em|rem)", re.IGNORECASE),
+    re.compile(r"(?:width|inline-size)\s*[<>]=?\s*([\d.]+)(px|em|rem)", re.IGNORECASE),
+    re.compile(r"([\d.]+)(px|em|rem)\s*[<>]=?\s*(?:width|inline-size)", re.IGNORECASE),
+)
+
+
+def css_breakpoints(css: str) -> list[int]:
+    """The breakpoints a stylesheet's text declares, in px (an em or rem is 16px)."""
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    found: set[int] = set()
+    for prelude in _QUERY_PRELUDE.finditer(css):
+        for pattern in _QUERY_WIDTHS:
+            for value, unit in pattern.findall(prelude.group(1)):
+                try:
+                    px = round(float(value) * (1 if unit.lower() == "px" else 16))
+                except ValueError:  # "1.2.3px"
+                    continue
+                if px > 0:
+                    found.add(px)
+    return sorted(found)
 
 
 def breakpoint_neighbors(breakpoints: Iterable[int], min_width: int, max_width: int) -> list[int]:

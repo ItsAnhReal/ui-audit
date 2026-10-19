@@ -1,0 +1,10 @@
+<!-- expect: dialog-too-tall=1 -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Tall dialog</title><style>
+body { margin: 0; font: 16px/1.5 sans-serif; }
+/* Fixed and as tall as its content: the end, with the button, is out of reach on any screen. */
+.dialog { position: fixed; top: 24px; left: 16px; right: 16px; padding: 16px; background: #fff; border: 1px solid #999; }
+.body { height: 1200px; }
+</style></head><body>
+<p>Page behind the dialog.</p>
+<div class="dialog" role="dialog" aria-modal="true" aria-labelledby="t"><h2 id="t">Release notes</h2><div class="body">Everything that changed.</div><button>Got it</button></div>
+</body></html>
