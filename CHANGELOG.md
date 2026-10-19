@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- More settings in `ui-audit.toml`, all listed in the new [configuration reference](https://github.com/ItsAnhReal/ui-audit/blob/main/docs/configuration.md): `[checks] disable` and `[checks.severity]` (unknown check names are errors), `[[routes.overrides]]` with widths and ignored selectors per route, `[checks] rules` for checks of your own as JavaScript files (reported as `rule:<name>`, `origin: rule`), `headers` and `http_credentials` sent to the app's origin only, `ignore_https_errors`, `[timeouts]`, and `${VAR}` environment variables in any string; `report.json` keeps the `${VAR}`, never a secret.
+- Custom states and `setup` gain `select`, `check`, `uncheck`, `scroll`, `goto` and `wait_for_url`; malformed actions are config errors, and a step that fails is named with its reason in the state's status and in `errors`. Failed requests to ad networks and tag managers are no longer reported as `failed-resource`.
 - One set of exit codes for every command: 0 ok, 1 findings over the threshold, 2 usage or input error, 3 the app or the audit failed. `audit --fail-on` now exits 1 (was 2), `ui-audit ci` exits 3 when it could not audit (was 2), `init` over an existing file and invalid agent findings exit 2, and a missing or broken `report.json` is a one-line error instead of a traceback.
 - `audit` no longer reports an unreachable app as 0 findings: a route that did not load, a run that measured no route, or most routes ending on one sign-in page (an expired `storage_state`) is an `error:` line and exit 3. `doctor` says which copy of the skill each agent reads, and `--help` shows the four-step loop.
 - `ui-audit ci` starts and stops the app on Windows too (the whole process tree ends with `taskkill /T`).

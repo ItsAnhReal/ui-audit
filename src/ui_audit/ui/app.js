@@ -313,7 +313,7 @@
   ];
   function messageText(issue) {
     const raw = issue.message || "";
-    if (issue.origin === "agent" || RUNTIME_CHECKS.has(issue.check)) return raw;
+    if (issue.origin === "agent" || issue.origin === "rule" || RUNTIME_CHECKS.has(issue.check)) return raw;
     for (const [pattern, key, names] of MESSAGES) {
       const m = pattern.exec(raw);
       if (!m) continue;

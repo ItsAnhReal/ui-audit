@@ -75,13 +75,26 @@ TRACKER_HOSTS = (
 )
 
 
+# Ad networks and tag managers. They are not blocked, since they can put boxes on the page,
+# but when one of their requests fails (an ad blocker in the network, an empty ad slot) that is
+# not the app's defect, so it is not reported as a failed resource.
+THIRD_PARTY_HOSTS = (
+    "googletagmanager.com", "googletagservices.com", "doubleclick.net", "googlesyndication.com",
+    "googleadservices.com", "adservice.google.com", "connect.facebook.net", "facebook.com",
+    "hotjar.com", "hotjar.io", "adnxs.com", "criteo.com", "criteo.net", "taboola.com", "outbrain.com",
+    "amazon-adsystem.com", "ads-twitter.com", "analytics.tiktok.com", "px.ads.linkedin.com",
+    "cdn.cookielaw.org", "intercomcdn.com", "widget.intercom.io",
+)
+
+
 def blocked_requests(entries: list[str], base_url: str) -> re.Pattern | None:
     """A pattern for request URLs to turn away: "trackers" stands for TRACKER_HOSTS, anything
     else is a host name, matched with its subdomains. The app's own host is never blocked."""
     own = (urlparse(base_url).hostname or "").lower()
     hosts = []
     for entry in entries:
-        for host in TRACKER_HOSTS if entry == "trackers" else [entry.strip().lower()]:
+        for host in (TRACKER_HOSTS if entry == "trackers" else THIRD_PARTY_HOSTS if entry == "third-party"
+                     else [entry.strip().lower()]):
             if host and host != own and not own.endswith("." + host) and host not in hosts:
                 hosts.append(host)
     if not hosts:
@@ -96,6 +109,8 @@ class RuntimeLog:
     failed_resources: list[str] = field(default_factory=list)
     # Requests turned away on purpose (block_requests); their failure is not the app's.
     blocked: re.Pattern | None = None
+    # Analytics, ads and tag managers: whether they load is up to them, not the app.
+    third_party: re.Pattern | None = None
 
     def on_console(self, message) -> None:
         # "Failed to load resource" repeats a failed request, which is
@@ -107,7 +122,7 @@ class RuntimeLog:
         # Browsers request /favicon.ico on their own; its absence is noise.
         if urlparse(url).path == "/favicon.ico":
             return
-        if self.blocked and self.blocked.search(url):
+        if (self.blocked and self.blocked.search(url)) or (self.third_party and self.third_party.search(url)):
             return
         # The page cancelled the request itself (it navigated or unmounted); nothing failed.
         # Chromium, Firefox and WebKit each word that differently.
@@ -159,6 +174,37 @@ def _watch(page, log: "RuntimeLog") -> None:
     page.on("response", lambda res: res.status >= 400 and log.on_failure(res.url, str(res.status)))
 
 
+def origin_of(url: str) -> str:
+    parsed = urlparse(url)
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def context_options(cfg) -> dict[str, Any]:
+    """Arguments for a new browser context: viewport, basic auth (sent to the app's origin
+    only) and whether invalid certificates are accepted."""
+    options: dict[str, Any] = {"viewport": {"width": 1280, "height": 900}}
+    if cfg.http_credentials:
+        options["http_credentials"] = {"username": cfg.http_credentials["username"],
+                                       "password": cfg.http_credentials["password"], "origin": origin_of(cfg.base_url)}
+    if cfg.ignore_https_errors:
+        options["ignore_https_errors"] = True
+    return options
+
+
+def prepare(context, cfg, blocked: re.Pattern | None = None) -> None:
+    """Install the probe, the timeouts, the extra headers and the request blocking on a context."""
+    context.add_init_script(PROBE_JS)
+    context.set_default_navigation_timeout(cfg.timeouts.navigation)
+    if blocked:
+        # Sent to the browser as a pattern: requests that do not match are not intercepted.
+        context.route(blocked, lambda route: route.abort("blockedbyclient"))
+    if cfg.headers:
+        # Only to the app's own origin: a preview token must not reach a CDN or an analytics host.
+        extra = dict(cfg.headers)
+        context.route(origin_of(cfg.base_url) + "/**",
+                      lambda route: route.continue_(headers={**route.request.headers, **extra}))
+
+
 @contextmanager
 def session(cfg, engine: str = "chromium", storage_state: dict | None = None):
     """Yield a Session, (page, runtime_log), with the probe script installed. Widths below
@@ -170,17 +216,15 @@ def session(cfg, engine: str = "chromium", storage_state: dict | None = None):
 
     with sync_playwright() as playwright:
         browser = launch(playwright, cfg.browser_path, engine=engine)
-        context_args = {"viewport": {"width": 1280, "height": 900}}
+        context_args = context_options(cfg)
         if storage_state is not None or cfg.storage_state:
             context_args["storage_state"] = storage_state if storage_state is not None else cfg.storage_state
         if cfg.locale:
             context_args["locale"] = cfg.locale
+        log = RuntimeLog(blocked=blocked_requests(cfg.block_requests, cfg.base_url),
+                         third_party=blocked_requests(["trackers", "third-party"], cfg.base_url))
         context = browser.new_context(**context_args)
-        context.add_init_script(PROBE_JS)
-        log = RuntimeLog(blocked=blocked_requests(cfg.block_requests, cfg.base_url))
-        if log.blocked:
-            # Sent to the browser as a pattern: requests that do not match are not intercepted.
-            context.route(log.blocked, lambda route: route.abort("blockedbyclient"))
+        prepare(context, cfg, log.blocked)
         page = context.new_page()
         _watch(page, log)
 
@@ -188,9 +232,7 @@ def session(cfg, engine: str = "chromium", storage_state: dict | None = None):
             phone = browser.new_context(**{**context_args, "viewport": {"width": 390, "height": 844},
                                            "storage_state": context.storage_state(),
                                            "is_mobile": True, "has_touch": True})
-            phone.add_init_script(PROBE_JS)
-            if log.blocked:
-                phone.route(log.blocked, lambda route: route.abort("blockedbyclient"))
+            prepare(phone, cfg, log.blocked)
             mobile_page = phone.new_page()
             _watch(mobile_page, log)
             return phone, mobile_page
@@ -220,9 +262,10 @@ def save_session(cfg, target: Path, path: str, wait, headless: bool = False) -> 
 
     with sync_playwright() as playwright:
         browser = launch(playwright, cfg.browser_path, headless=headless)
-        context = browser.new_context(viewport={"width": 1280, "height": 900})
+        context = browser.new_context(**context_options(cfg))
+        prepare(context, cfg)
         try:
-            context.new_page().goto(url_for(cfg.base_url, path), wait_until="load", timeout=30000)
+            context.new_page().goto(url_for(cfg.base_url, path), wait_until="load")
             wait()
             target.parent.mkdir(parents=True, exist_ok=True)
             context.storage_state(path=str(target))
@@ -240,15 +283,17 @@ def url_for(base_url: str, path: str) -> str:
     return urljoin(base_url.rstrip("/") + "/", "./" + path.lstrip("/"))
 
 
-def load(page, base_url: str, path: str, width: int, height: int, settle_ms: int):
-    """Open a route and return the main document's response (None if there was none)."""
+def load(page, base_url: str, path: str, width: int, height: int, settle_ms: int, idle_ms: int = 5000):
+    """Open a route and return the main document's response (None if there was none). It may
+    take as long as the context's navigation timeout, then up to `idle_ms` to go network-idle."""
     page.set_viewport_size({"width": width, "height": height})
     url = url_for(base_url, path)
     if routes.same_document(page.url, url):
         page.goto("about:blank")  # changing only the fragment does not reload; a hash route starts fresh
-    response = page.goto(url, wait_until="load", timeout=30000)
+    response = page.goto(url, wait_until="load")
     try:
-        page.wait_for_load_state("networkidle", timeout=5000)
+        if idle_ms:
+            page.wait_for_load_state("networkidle", timeout=idle_ms)
     except Exception:  # noqa: BLE001 - long-polling apps never go idle
         pass
     try:  # a page that says it is still loading is not measured, or mistaken for another, as a skeleton

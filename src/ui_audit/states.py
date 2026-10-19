@@ -13,6 +13,7 @@ import re
 from dataclasses import asdict, dataclass, field
 
 from . import browser, viewports
+from .config import describe_action
 
 # Discovery runs once at a narrow and once at a wide viewport, because
 # hamburger menus and desktop dropdowns only exist at one of them.
@@ -67,10 +68,10 @@ def open_page(page, cfg, route: str, width: int, height: int):
     is not there (a promo that stayed closed) is skipped. Then the page is scrolled through
     once, so sections that fade in on scroll are there when it is measured.
     """
-    response = browser.load(page, cfg.base_url, route, width, height, cfg.settle_ms)
+    response = browser.load(page, cfg.base_url, route, width, height, cfg.settle_ms, cfg.timeouts.network_idle)
     if cfg.setup:
         for action in cfg.setup:
-            _run_action(page, action)
+            _run_action(page, cfg, action)
         browser.settle(page, cfg.settle_ms)
     browser.reveal(page, cfg.settle_ms)
     return response
@@ -101,16 +102,22 @@ def first_width(page, cfg, state: State, widths: list[int]) -> tuple[int | None,
 def apply(page, cfg, state: State, width: int, height: int, loaded: bool = False) -> bool:
     """Load the route at `width` (unless it is `loaded` there already) and replay the state.
     False if not applicable."""
+    return replay(page, cfg, state, width, height, loaded) is None
+
+
+def replay(page, cfg, state: State, width: int, height: int, loaded: bool = False) -> str | None:
+    """apply(), returning None when the state is open, else which step failed and why."""
     if not loaded:
         open_page(page, cfg, state.route, width, height)
     url_before = page.url
-    for action in state.actions:
-        if not _run_action(page, action):
-            return False
+    for n, action in enumerate(state.actions, 1):
+        failure = _run_action(page, cfg, action)
+        if failure:
+            return f"step {n} ({describe_action(action)}) failed: {failure}"
     browser.settle(page, cfg.settle_ms)
     if state.kind == "auto" and page.url != url_before:
-        return False
-    return True
+        return "its control left the page"
+    return None
 
 
 def dismiss_consent(page, cfg) -> str | None:
@@ -130,35 +137,60 @@ def run_setup(page, cfg) -> list[str]:
     """Run the configured setup actions on "/"; returns one message per action that failed."""
     if not cfg.setup:
         return []
-    browser.load(page, cfg.base_url, "/", 1280, 900, cfg.settle_ms)
-    failed = [f"setup: action {n} could not run ({action})" for n, action in enumerate(cfg.setup, 1)
-              if not _run_action(page, action)]
+    browser.load(page, cfg.base_url, "/", 1280, 900, cfg.settle_ms, cfg.timeouts.network_idle)
+    failed = []
+    for n, action in enumerate(cfg.setup, 1):
+        failure = _run_action(page, cfg, action)
+        if failure:
+            failed.append(f"setup: step {n} ({describe_action(action)}) failed: {failure}")
     browser.settle(page, cfg.settle_ms)
     return failed
 
 
-def _run_action(page, action: dict) -> bool:
+def _run_action(page, cfg, action: dict) -> str | None:
+    """Run one setup or state action; None when it ran, else why it did not."""
+    timeout, wait = cfg.timeouts.action, cfg.timeouts.wait_for
     try:
         if "click" in action:
             locator = page.locator(action["click"]).first
             if not locator.is_visible():
-                return False
-            locator.click(timeout=3000)
+                return "not on the page or not visible"
+            locator.click(timeout=timeout)
         elif "hover" in action:
-            page.locator(action["hover"]).first.hover(timeout=3000)
+            page.locator(action["hover"]).first.hover(timeout=timeout)
         elif "fill" in action:
-            page.locator(action["fill"]).first.fill(str(action.get("value", "")), timeout=3000)
+            page.locator(action["fill"]).first.fill(str(action.get("value", "")), timeout=timeout)
+        elif "select" in action:
+            value = action.get("value", "")
+            page.locator(action["select"]).first.select_option(
+                [str(v) for v in value] if isinstance(value, list) else str(value), timeout=timeout)
+        elif "check" in action:
+            page.locator(action["check"]).first.check(timeout=timeout)
+        elif "uncheck" in action:
+            page.locator(action["uncheck"]).first.uncheck(timeout=timeout)
         elif "press" in action:
             page.keyboard.press(action["press"])
+        elif "scroll" in action:
+            if isinstance(action["scroll"], str):
+                page.locator(action["scroll"]).first.scroll_into_view_if_needed(timeout=timeout)
+            else:
+                page.evaluate("y => window.scrollTo(0, y)", action["scroll"])
+        elif "goto" in action:
+            page.goto(browser.url_for(cfg.base_url, action["goto"]), wait_until="load")
         elif "wait" in action:
             page.wait_for_timeout(int(action["wait"]))
         elif "wait_for" in action:
-            page.locator(action["wait_for"]).first.wait_for(timeout=5000)
+            page.locator(action["wait_for"]).first.wait_for(timeout=wait)
+        elif "wait_for_url" in action:
+            target = action["wait_for_url"]
+            # A route ("/cart") is a URL of the app; a pattern ("**/cart*") is used as it is.
+            page.wait_for_url(browser.url_for(cfg.base_url, target) if target.startswith("/") else target,
+                              timeout=wait)
         else:
-            return False
-    except Exception:  # noqa: BLE001 - a failed action means the state does not apply
-        return False
-    return True
+            return "no known action"
+    except Exception as exc:  # noqa: BLE001 - a failed action means the state does not apply
+        return f"{exc.__class__.__name__}: {(str(exc).splitlines() or [''])[0][:160]}"
+    return None
 
 
 def custom_states(cfg, route: str) -> list[State]:
@@ -178,7 +210,7 @@ def discover(page, cfg, route: str) -> list[State]:
     if not cfg.states.auto:
         return found
     seen_triggers: dict[str, State] = {}
-    opts = {"unsafeWords": cfg.states.unsafe_words, "ignoreSelectors": cfg.checks.ignore_selectors}
+    opts = {"unsafeWords": cfg.states.unsafe_words, "ignoreSelectors": cfg.route_settings(route)[1]}
     for applies_to, (width, height) in DISCOVERY_WIDTHS.items():
         try:
             open_page(page, cfg, route, width, height)

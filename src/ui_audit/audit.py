@@ -13,8 +13,8 @@ from typing import Callable
 from urllib.parse import urlparse
 
 from . import __version__, browser, report as report_mod, routes, semantic, states, viewports
-from .config import STANDARD_VIEWPORTS, Config
-from .issues import IssueSet, coverage_key, load_accepted, mark_accepted, sweep_signature
+from .config import STANDARD_VIEWPORTS, Config, rule_sources
+from .issues import IssueSet, configure, coverage_key, load_accepted, mark_accepted, sweep_signature
 from .sources import SourceIndex
 
 NOT_APPLICABLE = frozenset({"<state not applicable>"})
@@ -68,13 +68,28 @@ def _file_slug(route: str) -> str:
     return states.slug(route.strip("/")) if route.strip("/") else "root"
 
 
-def _probe_opts(cfg: Config) -> dict:
+def _probe_opts(cfg: Config, ignore_selectors: list[str] | None = None) -> dict:
     return {
         "minTarget": cfg.checks.min_target_size,
         "overlapThreshold": cfg.checks.overlap_threshold,
         "maxPerCheck": cfg.checks.max_issues_per_check,
-        "ignoreSelectors": cfg.checks.ignore_selectors,
+        "ignoreSelectors": cfg.checks.ignore_selectors if ignore_selectors is None else ignore_selectors,
+        "disable": cfg.checks.disable,
     }
+
+
+def rule_scripts(cfg: Config) -> list[tuple[str, str]]:
+    """(check, script to evaluate) per rule file that is not disabled. A rule file is one
+    function expression; it gets {width, height} and returns findings (or a promise of them),
+    which the probe turns into issues. It is part of the evaluated script rather than run with
+    eval(), so a page's Content-Security-Policy does not stop it."""
+    scripts = []
+    for check, source in rule_sources(cfg):
+        if check in cfg.checks.disable:
+            continue
+        body = source.strip().rstrip(";")
+        scripts.append((check, f"async o => window.__uiAudit.ruleFindings(o, await (\n{body}\n)(o.context))"))
+    return scripts
 
 
 def _not_a_page(response) -> str | None:
@@ -122,7 +137,8 @@ def _skip_reason(page, response, path: str, missing: str | None, seen_pages: dic
 def _missing_fingerprint(page, cfg: Config) -> str | None:
     """What the app renders for a URL it does not know (single-page apps answer 200)."""
     try:
-        browser.load(page, cfg.base_url, "/__ui-audit-missing-route__", 1280, 900, cfg.settle_ms)
+        browser.load(page, cfg.base_url, "/__ui-audit-missing-route__", 1280, 900, cfg.settle_ms,
+                     cfg.timeouts.network_idle)
         return page.evaluate("() => window.__uiAudit.pageFingerprint()")
     except Exception:  # noqa: BLE001 - without a reference, nothing is treated as not found
         return None
@@ -147,7 +163,8 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
         stale.unlink()
 
     vc = cfg.viewports
-    issue_set = IssueSet()
+    rules = rule_scripts(cfg)  # before anything starts: an unreadable rule file is a config error
+    issue_set = IssueSet(cfg.checks.disable, cfg.checks.severity)
     captures: list[dict] = []
     state_records: list[dict] = []
     coverage: dict[str, list[int]] = {}
@@ -157,7 +174,6 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
     errors: list[str] = []
     all_breakpoints: set[int] = set()
     probe_count = 0
-    opts = _probe_opts(cfg)
 
     consent: str | None = None
     index = SourceIndex(Path(cfg.project_root))
@@ -261,7 +277,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
             engine_consent = None
             if cfg.states.dismiss_consent:
                 try:
-                    browser.load(page, cfg.base_url, "/", 1280, 900, cfg.settle_ms)
+                    browser.load(page, cfg.base_url, "/", 1280, 900, cfg.settle_ms, cfg.timeouts.network_idle)
                     engine_consent = states.dismiss_consent(page, cfg)
                 except Exception:  # noqa: BLE001 - the routes below report what cannot be loaded
                     pass
@@ -358,6 +374,9 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                 each one. Everything it finds goes into `work`, merged into the report later."""
                 page, runtime = session
                 path, breakpoints, baseline_errors = work.route.path, work.breakpoints, work.baseline_errors
+                # [[routes.overrides]]: widths that replace the sweep, selectors to leave out.
+                fixed_widths, ignore = cfg.route_settings(path)
+                opts = _probe_opts(cfg, ignore)
                 initial_anomalies: set[int] = set()
                 if leading:
                     state_list = [states.default_state(path), *states.custom_states(cfg, path)]
@@ -378,9 +397,9 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     if lo > hi:
                         finish(record, "skipped: no widths in range")
                         continue
-                    key_only = cfg.states.sweep == "key" and state.kind != "default" and not vc.widths
-                    if vc.widths:
-                        probe_widths = sorted({w for w in vc.widths if lo <= w <= hi})
+                    key_only = cfg.states.sweep == "key" and state.kind != "default" and not fixed_widths
+                    if fixed_widths:
+                        probe_widths = sorted({w for w in fixed_widths if lo <= w <= hi})
                     elif key_only:
                         probe_widths = sorted(
                             {w for _, w, _ in STANDARD_VIEWPORTS if lo <= w <= hi}
@@ -407,18 +426,21 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                         runtime.clear()
                     # Narrow widths are measured on a phone page, the others on the desktop page. The
                     # state is replayed on each page the first time a width needs it.
-                    applied: dict[int, bool] = {}
+                    applied: dict[int, str | None] = {}  # page → why the state could not be opened there
 
                     def page_at(width: int, _state=state, _applied=applied, _ready=scout if loaded else None):
                         target = session.page_for(width)
                         if id(target) not in _applied:
-                            _applied[id(target)] = states.apply(target, cfg, _state, width, viewports.height_for(width),
-                                                                target is _ready)
-                        return target if _applied[id(target)] else None
+                            _applied[id(target)] = states.replay(target, cfg, _state, width, viewports.height_for(width),
+                                                                 target is _ready)
+                        return target if _applied[id(target)] is None else None
 
                     first_page = page_at(first)
                     if first_page is None:
-                        finish(record, "skipped: could not be applied")
+                        failure = next(iter(applied.values()), None)
+                        finish(record, "skipped: could not be applied" + (f" ({failure})" if failure else ""))
+                        if state.kind == "custom" and failure:
+                            work.errors.append(f"{where(path)} [{state.id}]: {failure}")
                         continue
                     if state.kind != "default":
                         note_sources(first_page, work.sources)  # an opened dialog or menu brings its own components
@@ -447,6 +469,20 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                             _na.add(width)
                             return NOT_APPLICABLE
                         result = target.evaluate("o => window.__uiAudit.probe(o)", opts)
+                        for check, script in rules:
+                            try:
+                                found = target.evaluate(script, {**opts, "check": check, "context": {
+                                    "width": width, "height": viewports.height_for(width)}})
+                            except Exception as exc:  # noqa: BLE001 - a broken rule must not end the audit
+                                first_line = (str(exc).splitlines() or [""])[0][:160]
+                                failure = f"{where(path)} [{_state.id}]: rule {check} failed ({first_line})"
+                                if failure not in work.errors:
+                                    work.errors.append(failure)
+                                continue
+                            result["issues"].extend(found["issues"])
+                            if found["count"] > cfg.checks.max_issues_per_check:
+                                result.setdefault("truncated", {})[check] = found["count"]
+                        configure(result, cfg.checks.disable, cfg.checks.severity)
                         _results[width] = result
                         for raw in result["issues"]:
                             work.observe(raw, path, _state.id, width, engine)
@@ -455,7 +491,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                         return sweep_signature(result)
 
                     try:
-                        sweep = viewports.sweep(probe, probe_widths, refine=vc.refine and not vc.widths and not key_only,
+                        sweep = viewports.sweep(probe, probe_widths, refine=vc.refine and not fixed_widths and not key_only,
                                                 max_refinements=vc.max_refinements)
                         if state.kind == "default":
                             initial_anomalies.update(sweep.anomalies)
@@ -467,7 +503,7 @@ def run(cfg: Config, only_routes: list[str] | None = None, log: Callable[[str], 
                     work.coverage[coverage_key(path, state.id, engine)] = sorted(results)
 
                     standard = [w for _, w, _ in STANDARD_VIEWPORTS if lo <= w <= hi]
-                    if vc.widths:
+                    if fixed_widths:
                         plans = [viewports.CapturePlan(w, ["requested"]) for w in probe_widths]
                     else:
                         bp_widths = viewports.breakpoint_neighbors(breakpoints, lo, hi) if vc.breakpoint_neighbors else []

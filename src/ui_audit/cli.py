@@ -12,7 +12,8 @@ from importlib import resources
 from pathlib import Path
 
 from . import __version__
-from .config import CONFIG_FILENAME, ConfigError, from_dict, load, parse_browsers, render_template, validate
+from .config import (CONFIG_FILENAME, ConfigError, from_dict, load, parse_browsers, render_template, rule_sources,
+                     validate)
 from .sources import SOURCE_EXTS
 
 # Exit codes, the same for every command (README "Exit codes").
@@ -363,6 +364,7 @@ def cmd_audit(args) -> int:
         cfg.viewports.sweep_step = args.sweep_step
     try:
         validate(cfg)
+        rule_sources(cfg)  # a rule file that cannot be read stops the audit before it starts
     except ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return 2
